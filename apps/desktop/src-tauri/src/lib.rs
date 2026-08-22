@@ -1,6 +1,6 @@
 //! Tauri backend for the BambooHR training exporter.
 //!
-//! Two responsibilities live here rather than in the web layer:
+//! Four responsibilities live here rather than in the web layer:
 //!
 //! 1. **HTTP.** BambooHR sends no CORS headers, so the webview can never call
 //!    it directly. `tauri-plugin-http` issues requests from Rust instead.
@@ -10,12 +10,18 @@
 //!    whose scope is granted as a side effect of the folder dialog. That made
 //!    writing work on the run where the user picked a folder and fail on every
 //!    later run that reused the remembered path.
+//! 4. **Calling the user's AI provider.** See `ai.rs`: the capability pin
+//!    cannot express a base URL typed in at runtime, and the provider key is
+//!    never handed to the webview at all.
+
+mod ai;
 
 use keyring::Entry;
 
 /// One credential per BambooHR company, so a user with access to more than one
-/// subdomain does not have them overwrite each other.
-const KEYRING_SERVICE: &str = "com.bambooep.desktop";
+/// subdomain does not have them overwrite each other. AI provider keys share
+/// the service but are namespaced `ai:` - see `ai.rs`.
+pub(crate) const KEYRING_SERVICE: &str = "com.bambooep.desktop";
 
 fn entry(subdomain: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, subdomain).map_err(|e| format!("Credential store unavailable: {e}"))
@@ -92,7 +98,11 @@ pub fn run() {
             load_api_key,
             delete_api_key,
             ensure_export_directory,
-            write_export_file
+            write_export_file,
+            ai::save_ai_key,
+            ai::has_ai_key,
+            ai::delete_ai_key,
+            ai::ai_extract
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

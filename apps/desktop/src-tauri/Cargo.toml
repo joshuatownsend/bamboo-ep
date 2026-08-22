@@ -22,6 +22,13 @@ tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The AI provider call is made here rather than through tauri-plugin-http.
+# That plugin's allow-list is pinned to BambooHR in capabilities/default.json
+# and cannot express a base URL the user types in at runtime. Owning the
+# request here also means the provider API key is read straight from the
+# credential store into the request and never crosses into the webview.
+reqwest = { version = "0.12", features = ["json"] }
+
 # The OS credential store: Windows Credential Manager, macOS Keychain, and
 # the Secret Service on Linux. Chosen over tauri-plugin-stronghold because
 # Stronghold needs a vault password, which would mean asking every employee

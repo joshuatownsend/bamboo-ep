@@ -38,6 +38,67 @@ export const credentialStore = {
   remove: (subdomain: string): Promise<void> => invoke("delete_api_key", { subdomain }),
 };
 
+// --- The AI provider ----------------------------------------------------------
+
+/**
+ * "openai" names a request SHAPE, not a vendor. Ollama, LM Studio, OpenRouter,
+ * Together and most proxies speak it, which is how a local model - the option
+ * that sends nothing anywhere - is reached.
+ */
+export type AiProvider = "anthropic" | "openai";
+
+export interface AiSettings {
+  provider: AiProvider;
+  /** Empty means "use the provider's own default", resolved on use. */
+  baseUrl: string;
+  model: string;
+}
+
+export const AI_DEFAULTS: Readonly<Record<AiProvider, { baseUrl: string; model: string }>> = {
+  anthropic: { baseUrl: "https://api.anthropic.com", model: "claude-opus-5" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o" },
+};
+
+/**
+ * The provider key is held in the OS credential store and is never returned to
+ * the web layer - `has` answers whether one exists, and that is the only
+ * question this side of the app needs answered. The request that uses it is
+ * built in Rust, so the secret goes from the keychain to the wire without ever
+ * being a JavaScript string.
+ */
+export const aiKeyStore = {
+  save: (provider: AiProvider, apiKey: string): Promise<void> =>
+    invoke("save_ai_key", { provider, apiKey }),
+
+  has: (provider: AiProvider): Promise<boolean> => invoke("has_ai_key", { provider }),
+
+  remove: (provider: AiProvider): Promise<void> => invoke("delete_ai_key", { provider }),
+};
+
+/**
+ * Send one page image to the model. Returns the model's answer as raw text;
+ * making sense of it is `packages/core`'s job, so the prompt, the schema and
+ * the parser stay together where they can be tested.
+ */
+export function aiExtract(args: {
+  settings: AiSettings;
+  prompt: string;
+  schema: unknown;
+  imageBase64: string;
+  imageMime: string;
+}): Promise<string> {
+  const defaults = AI_DEFAULTS[args.settings.provider];
+  return invoke("ai_extract", {
+    provider: args.settings.provider,
+    baseUrl: args.settings.baseUrl.trim() || defaults.baseUrl,
+    model: args.settings.model.trim() || defaults.model,
+    prompt: args.prompt,
+    schema: args.schema,
+    imageBase64: args.imageBase64,
+    imageMime: args.imageMime,
+  });
+}
+
 // --- Settings -----------------------------------------------------------------
 
 export interface Settings {
@@ -47,6 +108,12 @@ export interface Settings {
   includeOrphanFiles: boolean;
   /** Match corrections, keyed by subdomain then fileId, so they survive re-runs. */
   confirmedMatches: Record<string, Record<string, string>>;
+  /**
+   * Which model to use if the user asks for a document check. Non-secret by
+   * construction: the key itself lives in the credential store, so this file
+   * records only where requests would go, never what authorises them.
+   */
+  ai: AiSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +122,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputDir: null,
   includeOrphanFiles: false,
   confirmedMatches: {},
+  ai: { provider: "anthropic", baseUrl: "", model: "" },
 };
 
 const SETTINGS_FILE = "settings.json";
@@ -65,7 +133,14 @@ export async function loadSettings(): Promise<Settings> {
   try {
     const store = await load(SETTINGS_FILE, { autoSave: true });
     const stored = await store.get<Partial<Settings>>(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+    // `ai` is merged one level deeper: a settings file written before this
+    // block existed has no `ai` key at all, and a shallow spread would leave
+    // it undefined for every reader downstream.
+    return {
+      ...DEFAULT_SETTINGS,
+      ...(stored ?? {}),
+      ai: { ...DEFAULT_SETTINGS.ai, ...(stored?.ai ?? {}) },
+    };
   } catch {
     // A corrupt or unreadable settings file must not block the app; defaults
     // are always a valid starting point.
