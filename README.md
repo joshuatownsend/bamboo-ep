@@ -82,14 +82,29 @@ independently, so one refusal does not hide the rest.
 
 ### Findings
 
-> Record the answers here after running against a real account. The app degrades based
-> on these, but knowing them up front makes the degradation paths easier to test.
+Probed against the **avfrd** company on 2026-08-21:
 
-| Question | Non-admin key | Admin key |
-|---|---|---|
-| Endpoint form | _unrecorded_ | _unrecorded_ |
-| `/training/type` readable | _unrecorded_ | _unrecorded_ |
-| Populated sources | _unrecorded_ | _unrecorded_ |
+| Question | Answer |
+|---|---|
+| Endpoint form | **modern** — `https://avfrd.bamboohr.com/api/v1` answered; the legacy gateway fallback was not needed |
+| `/training/type` readable | **yes** — 885 training types returned, so records get real certification names |
+| Populated sources | Training records **166**, certifications table **1**, employee files **78** |
+
+What this means for this account:
+
+- **Naming works properly.** The feared 403 on `/training/type` did not occur, so the
+  join from `record.type` to a real certification name succeeds and the placeholder
+  fallback (`Training {typeId}`) should rarely appear.
+- **Training records, not the certifications table, are the real source here** — 166
+  records against a single certification row.
+- **Most records will have no file.** 166 records and 78 files means at least 88
+  records can have no certificate attached, which is exactly why record-only entries
+  still reach the summary and the manifest.
+
+Not yet established: whether the key used was admin or non-admin. BambooHR permissions
+the API as the underlying user, so a non-admin key may still be refused on
+`/training/type` — the degradation path remains untested against a real refusal even
+though the code path is unit-tested.
 
 ## How a certification gets its name
 
@@ -172,8 +187,8 @@ One retry rule is worth calling out because it is inverted from most APIs:
 Everything below compiles and passes tests, but **no request has yet been made
 against a real BambooHR account**. In rough order of what to do first:
 
-1. **Run the probe with a real key** and fill in the Findings table above. The
-   three open questions are still open.
+1. ~~Run the probe with a real key.~~ **Done** — see Findings above. All three
+   questions answered against the `avfrd` account.
 2. **Click through `pnpm tauri dev`.** The keychain commands, the plugin-http
    host allowlist, and the dialog/filesystem plugins have compiled but never
    executed. The capability allowlist in particular can only fail at runtime —
