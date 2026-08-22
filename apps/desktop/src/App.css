@@ -1,0 +1,497 @@
+/* Tokens are defined once on :root for light, then overridden for dark, so no
+   colour has its only definition inside a media query. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #dfe3e8;
+  --text: #1b2430;
+  --text-muted: #5b6675;
+  --accent: #2f6f4f;
+  --accent-text: #ffffff;
+  --ok-bg: #e6f4ec;
+  --ok-text: #1f6340;
+  --warn-bg: #fdf3e2;
+  --warn-text: #8a5a12;
+  --error-bg: #fdeaea;
+  --error-text: #98262a;
+  --neutral-bg: #eef0f3;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191d;
+    --surface: #1e2228;
+    --border: #333941;
+    --text: #e8eaed;
+    --text-muted: #9aa4b2;
+    --accent: #4a9e72;
+    --accent-text: #0d1410;
+    --ok-bg: #1b3529;
+    --ok-text: #7fd3a5;
+    --warn-bg: #382c17;
+    --warn-text: #e8bb6f;
+    --error-bg: #3a1f21;
+    --error-text: #f0999c;
+    --neutral-bg: #272c33;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.app-header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.steps {
+  display: flex;
+  gap: 18px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.step-index {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: var(--neutral-bg);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps li.current {
+  color: var(--text);
+  font-weight: 600;
+}
+.steps li.current .step-index {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.steps li.done .step-index {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+/* Layout ------------------------------------------------------------------ */
+
+.screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 880px) {
+  .screen {
+    grid-template-columns: 1fr;
+  }
+}
+
+.screen-main,
+.screen-aside {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.screen-main h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.screen-aside h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.lede {
+  color: var(--text-muted);
+  margin: 0 0 18px;
+  max-width: 62ch;
+}
+
+/* Forms ------------------------------------------------------------------- */
+
+.form {
+  display: grid;
+  gap: 16px;
+  max-width: 420px;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+input[type="text"],
+input[type="password"],
+select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.checkbox {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  font-size: 14px;
+}
+
+.checkbox small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+button {
+  font: inherit;
+  padding: 9px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.secondary.full {
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* Banners ----------------------------------------------------------------- */
+
+.banner {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.banner ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.banner.error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.banner.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.banner.busy {
+  background: var(--neutral-bg);
+  color: var(--text);
+}
+
+.progress-track {
+  height: 5px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  /* Scale rather than animate width: transform is composited, so the bar
+     cannot cause layout thrash while downloads are running. */
+  transition: transform 160ms ease-out;
+}
+
+.progress-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.progress-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Probe results ----------------------------------------------------------- */
+
+.probe-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.probe-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.probe-text {
+  display: grid;
+  gap: 2px;
+}
+
+.probe-text span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.pill {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  min-width: 96px;
+  text-align: center;
+}
+
+.pill-ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+.pill-empty,
+.pill-unavailable {
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+}
+.pill-forbidden {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.pill-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.advice {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+  display: grid;
+  gap: 10px;
+}
+
+/* Review table ------------------------------------------------------------ */
+
+.screen-wide {
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+}
+
+.review-table thead th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.review-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.col-include {
+  width: 60px;
+}
+
+.row-excluded {
+  opacity: 0.45;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.confidence-high {
+  color: var(--ok-text);
+}
+.confidence-medium {
+  color: var(--warn-text);
+}
+
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tag-warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+/* Result ------------------------------------------------------------------ */
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  margin: 18px 0 22px;
+}
+
+.stats dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats dd {
+  margin: 2px 0 0;
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.instructions,
+.file-legend {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  display: grid;
+  gap: 8px;
+}
+
+.file-legend {
+  list-style: none;
+  padding-left: 0;
+}
+
+.aside-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--neutral-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+}

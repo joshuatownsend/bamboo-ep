@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the BambooHR training exporter",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "store:default",
+    "dialog:allow-open",
+    "dialog:allow-message",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*.bamboohr.com/*" },
+        { "url": "https://api.bamboohr.com/*" }
+      ]
+    }
+  ]
+}
