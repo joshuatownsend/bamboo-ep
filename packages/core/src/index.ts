@@ -3,6 +3,7 @@ export * from "./http.js";
 export * from "./normalize.js";
 export * from "./bamboo.js";
 export * from "./probe.js";
+export * from "./identity.js";
 export * from "./items.js";
 export * from "./naming.js";
 export * from "./matching.js";

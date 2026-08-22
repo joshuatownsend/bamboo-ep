@@ -12,6 +12,12 @@ const connection: Connection = {
   baseUrl: "https://acme.bamboohr.com/api/v1",
   style: "modern",
   employeeId: "123",
+  employee: {
+    firstName: "Joshua",
+    lastName: "Townsend",
+    displayName: "Joshua Townsend",
+    preferredName: null,
+  },
 };
 
 function item(partial: Partial<TrainingItem> & { key: string; name: string }): TrainingItem {

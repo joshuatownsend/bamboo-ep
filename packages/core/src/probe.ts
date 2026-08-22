@@ -1,5 +1,6 @@
 import { BambooClient } from "./bamboo.js";
 import { BambooApiError, BambooHttp, buildBaseUrl } from "./http.js";
+import { displayNameOf } from "./identity.js";
 import type { FetchLike } from "./http.js";
 import type { BaseUrlStyle, Connection, Credentials } from "./types.js";
 
@@ -71,11 +72,18 @@ export async function runProbe(
     new BambooHttp(fetchImpl, connection.baseUrl, credentials),
   );
 
+  // The name matters beyond politeness: it is the only thing that can answer
+  // whether a certificate belongs to this person at all, so its absence is
+  // reported rather than passed over.
+  const who = displayNameOf(connection.employee);
   results.push({
     id: "self",
     label: "Your employee record",
     status: "ok",
-    detail: `Resolved your BambooHR employee id (${connection.employeeId}).`,
+    detail: who
+      ? `Resolved your BambooHR employee id (${connection.employeeId}) and name (${who}).`
+      : `Resolved your BambooHR employee id (${connection.employeeId}). ` +
+        "Your name was not returned, so certificates cannot be checked against it.",
   });
 
   const [records, types, certifications, files] = await Promise.all([
@@ -123,9 +131,9 @@ async function resolveConnection(
     const baseUrl = buildBaseUrl(credentials.subdomain, style);
     try {
       const client = new BambooClient(new BambooHttp(fetchImpl, baseUrl, credentials));
-      const employeeId = await client.getSelfEmployeeId();
+      const { employeeId, identity } = await client.getSelf();
       return {
-        connection: { credentials, baseUrl, style, employeeId },
+        connection: { credentials, baseUrl, style, employeeId, employee: identity },
         result: {
           id: "connection",
           label: "Connection",
