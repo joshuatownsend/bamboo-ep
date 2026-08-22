@@ -11,6 +11,7 @@ import type {
   Credentials,
   ProbeReport,
   PullResult,
+  Verification,
   Workspace,
 } from "@bamboo-ep/core";
 import {
@@ -126,6 +127,7 @@ export default function App() {
       confirmed: Record<string, string>,
       excludedItemKeys: string[],
       nextSaved: Record<string, string>,
+      verifications: Record<string, Verification>,
     ) => {
       if (!client || !connection || !workspace) return;
 
@@ -148,6 +150,7 @@ export default function App() {
             confirmed,
             excludedItemKeys,
             includeOrphanFiles: settings.includeOrphanFiles,
+            verifications,
           },
           filenameTemplate: settings.filenameTemplate,
           // Claimed up front so a certification named "Training Summary"
@@ -329,6 +332,7 @@ export default function App() {
             onClearSaved={handleClearSaved}
             onBack={() => setStep("probe")}
             loadFileBytes={loadFileBytes}
+            identity={connection?.employee ?? null}
           />
         )}
 

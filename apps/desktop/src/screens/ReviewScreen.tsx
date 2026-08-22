@@ -8,12 +8,15 @@ import {
   stemOf,
 } from "@bamboo-ep/core";
 import { SUMMARY_PDF_FILENAME } from "../pdf";
-import type { Workspace } from "@bamboo-ep/core";
+import type { EmployeeIdentity, TrainingItem, Verification, Workspace } from "@bamboo-ep/core";
 import { chooseOutputDirectory } from "../platform";
 import type { Settings } from "../platform";
 import { renderPreview } from "../preview";
 import { usePreviews } from "../usePreviews";
 import { CertificatePreview, PreviewLightbox } from "../components/CertificatePreview";
+import { AiSettingsPanel } from "../components/AiSettingsPanel";
+import { VerificationSignal } from "../components/VerificationSignal";
+import { useVerification } from "../useVerification";
 
 /**
  * Match review.
@@ -39,6 +42,8 @@ interface Props {
      * be forgotten.
      */
     nextSaved: Record<string, string>,
+    /** Document checks that survived to the moment of saving. */
+    verifications: Record<string, Verification>,
   ) => void;
   /** Discard every saved choice for this company and re-match from scratch. */
   onClearSaved: () => void;
@@ -50,6 +55,8 @@ interface Props {
   loadFileBytes: (
     fileId: string,
   ) => Promise<{ bytes: Uint8Array; contentType: string | null }>;
+  /** The employee whose profile this is, for the "right person?" check. */
+  identity: EmployeeIdentity | null;
 }
 
 export function ReviewScreen({
@@ -61,6 +68,7 @@ export function ReviewScreen({
   onClearSaved,
   onBack,
   loadFileBytes,
+  identity,
 }: Props) {
   // itemKey -> fileId. Seeded from the proposed plan, then edited freely.
   const proposed = useMemo(
@@ -93,6 +101,58 @@ export function ReviewScreen({
   const pagePreviews = usePreviews(renderFile);
   const [zoomed, setZoomed] = useState<{ fileId: string; label: string } | null>(null);
   const zoomedState = zoomed ? pagePreviews.stateOf(zoomed.fileId) : null;
+
+  const [aiKeyPresent, setAiKeyPresent] = useState(false);
+  const checks = useVerification({
+    settings: settings.ai,
+    identity,
+    items: workspace.items,
+    previews: pagePreviews,
+  });
+
+  const itemsByKey = useMemo(
+    () => new Map(workspace.items.map((i) => [i.key, i])),
+    [workspace.items],
+  );
+
+  /**
+   * Repointing a row throws away any check it had. The check was about the
+   * PAIR, so keeping it would relabel a verdict onto a document nobody looked
+   * at - the same reason executePull re-checks the file id before writing.
+   */
+  const assign = (itemKey: string, fileId: string | null) => {
+    const next = { ...assignments };
+    if (fileId) next[itemKey] = fileId;
+    else delete next[itemKey];
+    setAssignments(next);
+    if (assignments[itemKey] !== fileId) checks.forget(itemKey);
+  };
+
+  /**
+   * Which rows are worth spending a model call on.
+   *
+   * The decision was flagged-only: anything the scorer did not rate "high" and
+   * anything the user has repointed by hand. The gap this leaves is real and
+   * was accepted - a colleague's certificate whose filename happens to match
+   * cleanly scores high and is never checked - which is why every row also has
+   * its own button.
+   */
+  const isFlagged = (itemKey: string): boolean => {
+    const assigned = assignments[itemKey];
+    if (!assigned) return false;
+    const match = matchByItem.get(itemKey);
+    return !(match && match.fileId === assigned && match.confidence === "high");
+  };
+
+  const flaggedPairs = useMemo(
+    () =>
+      workspace.items
+        .filter((i) => !excluded.has(i.key) && isFlagged(i.key))
+        .filter((i) => checks.stateOf(i.key).status === "idle")
+        .map((i) => ({ item: i as TrainingItem, fileId: assignments[i.key]! })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assignments, excluded, matchByItem, workspace.items, checks],
+  );
 
   /** A file may back only one record, so offer only what is still free. */
   const availableFilesFor = (itemKey: string) => {
@@ -163,7 +223,7 @@ export function ReviewScreen({
 
     // nextSaved REPLACES what was stored, so a pairing the user cleared or
     // repointed disappears instead of resurfacing on the next run.
-    onDownload(confirmed, [...excluded], nextSaved);
+    onDownload(confirmed, [...excluded], nextSaved, { ...checks.all });
   };
 
   const savedCount = workspace.plan.matches.filter((m) => m.confirmedByUser).length;
@@ -208,6 +268,20 @@ export function ReviewScreen({
               ? "All pages shown"
               : `Show all ${unrenderedCount} certificate page${unrenderedCount === 1 ? "" : "s"}`}
           </button>
+          {aiKeyPresent && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={flaggedPairs.length === 0 || checks.busy}
+              onClick={() => void checks.verifyMany(flaggedPairs)}
+            >
+              {checks.busy
+                ? "Checking…"
+                : flaggedPairs.length === 0
+                  ? "No uncertain pairings left"
+                  : `Check ${flaggedPairs.length} uncertain pairing${flaggedPairs.length === 1 ? "" : "s"} with AI`}
+            </button>
+          )}
           <span className="field-hint">
             Reading each page is the fastest way to catch a certificate paired with the
             wrong record. Nothing is saved to your computer by doing this.
@@ -285,12 +359,7 @@ export function ReviewScreen({
                     <select
                       value={assigned}
                       disabled={isExcluded}
-                      onChange={(e) => {
-                        const next = { ...assignments };
-                        if (e.target.value) next[item.key] = e.target.value;
-                        else delete next[item.key];
-                        setAssignments(next);
-                      }}
+                      onChange={(e) => assign(item.key, e.target.value || null)}
                     >
                       <option value="">No file</option>
                       {availableFilesFor(item.key).map((f) => (
@@ -303,11 +372,7 @@ export function ReviewScreen({
                       <button
                         type="button"
                         className="link-button"
-                        onClick={() => {
-                          const next = { ...assignments };
-                          delete next[item.key];
-                          setAssignments(next);
-                        }}
+                        onClick={() => assign(item.key, null)}
                       >
                         Clear — free this file for another record
                       </button>
@@ -319,6 +384,24 @@ export function ReviewScreen({
                           : `${match.confidence} confidence — ${match.reasons[0] ?? "weak signal"}`}
                       </div>
                     )}
+
+                    {/* The third signal, after the score and the thumbnail:
+                        what the document itself says. */}
+                    <VerificationSignal
+                      state={checks.stateOf(item.key)}
+                      nameOf={(key) => itemsByKey.get(key)?.name}
+                      onRetry={() => void checks.verify(item, assigned)}
+                    />
+                    {assigned && !isExcluded && aiKeyPresent &&
+                      checks.stateOf(item.key).status === "idle" && (
+                        <button
+                          type="button"
+                          className="link-button"
+                          onClick={() => void checks.verify(item, assigned)}
+                        >
+                          Check this certificate with AI
+                        </button>
+                      )}
                   </td>
 
                   <td className="muted mono">
@@ -416,6 +499,12 @@ export function ReviewScreen({
             onClose={() => setZoomed(null)}
           />
         )}
+
+        <AiSettingsPanel
+          settings={settings.ai}
+          onChange={(ai) => onSettingsChange({ ...settings, ai })}
+          onKeyPresenceChange={setAiKeyPresent}
+        />
 
         <p className="aside-note">
           Every record is written to the summary, including those with no certificate file —

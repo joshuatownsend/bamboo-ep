@@ -1,0 +1,110 @@
+import type { Verification } from "@bamboo-ep/core";
+import type { VerifyState } from "../useVerification";
+
+/**
+ * The third signal on a row, after the matcher's confidence and the thumbnail.
+ *
+ * It is worded as evidence, never as a ruling: "the page reads X" rather than
+ * "wrong". The decision was that a contradiction warns and never blocks, and
+ * the wording has to match - a check that talks like an authority gets
+ * switched off the first time it is wrong, and then catches nothing at all.
+ */
+
+interface Props {
+  state: VerifyState;
+  /** Certification names by item key, so a suggestion can be named. */
+  nameOf: (itemKey: string) => string | undefined;
+  onRetry: () => void;
+}
+
+export function VerificationSignal({ state, nameOf, onRetry }: Props) {
+  if (state.status === "idle") return null;
+
+  if (state.status === "running") {
+    return <div className="sub verdict-pending">Reading the certificate…</div>;
+  }
+
+  if (state.status === "failed") {
+    return (
+      <div className="sub verdict-failed">
+        The check could not run: {state.message}
+        <button type="button" className="link-button" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  return <Verdicts verification={state.verification} nameOf={nameOf} />;
+}
+
+function Verdicts({
+  verification,
+  nameOf,
+}: {
+  verification: Verification;
+  nameOf: (itemKey: string) => string | undefined;
+}) {
+  const { verdicts, extracted, suggestedItemKey, provider, error } = verification;
+
+  if (error) {
+    return <div className="sub verdict-failed">{provider} could not read this page: {error}</div>;
+  }
+
+  const problems: string[] = [];
+  if (verdicts.person === "contradicts") {
+    problems.push(
+      `it appears to be issued to ${extracted?.personName ?? "someone else"}`,
+    );
+  }
+  if (verdicts.name === "contradicts") {
+    const suggestion = suggestedItemKey ? nameOf(suggestedItemKey) : undefined;
+    problems.push(
+      suggestion
+        ? `the page reads “${extracted?.certificationName ?? "?"}”, which matches ${suggestion}`
+        : `the page reads “${extracted?.certificationName ?? "?"}”`,
+    );
+  }
+  if (verdicts.date === "contradicts") {
+    problems.push(`the date printed is ${extracted?.issuedDate ?? "different"}`);
+  }
+
+  if (problems.length > 0) {
+    return (
+      <div className="sub verdict-contradicts">
+        <strong>Check this one:</strong> {problems.join("; ")}.
+        <span className="verdict-source"> Read by {provider}.</span>
+      </div>
+    );
+  }
+
+  const confirmed = Object.values(verdicts).filter((v) => v === "confirms").length;
+  if (confirmed === 0) {
+    // Every axis inconclusive: the page was legible enough to answer with, but
+    // nothing on it either agreed or disagreed. Saying "verified" here would
+    // be a lie by omission.
+    return (
+      <div className="sub verdict-inconclusive">
+        The page did not say enough to confirm or contradict this.
+        <span className="verdict-source"> Read by {provider}.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sub verdict-confirms">
+      The page agrees{describeAgreement(verdicts)}.
+      <span className="verdict-source"> Read by {provider}.</span>
+    </div>
+  );
+}
+
+/** Name what was actually checked, so "agrees" is never mistaken for "all of it". */
+function describeAgreement(verdicts: Verification["verdicts"]): string {
+  const parts = [
+    verdicts.name === "confirms" ? "the certification" : null,
+    verdicts.date === "confirms" ? "the date" : null,
+    verdicts.person === "confirms" ? "your name" : null,
+  ].filter((v): v is string => v != null);
+  return parts.length > 0 ? ` on ${parts.join(", ")}` : "";
+}

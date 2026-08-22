@@ -625,3 +625,51 @@ code {
   font-size: 13px;
   color: var(--text);
 }
+
+/* --- Document checks ---------------------------------------------------- */
+
+/* Deliberately not the same green as a high-confidence score. A filename
+   agreeing and a document agreeing are different claims, and colour is the
+   fastest way a reviewer tells them apart. */
+.verdict-confirms {
+  color: var(--ok-text);
+}
+
+.verdict-contradicts {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.verdict-inconclusive,
+.verdict-pending {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.verdict-failed {
+  color: var(--error-text);
+}
+
+/* Naming the provider on every result is the residual of the decision not to
+   gate each run: the user is not asked again, so they are told instead. */
+.verdict-source {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ai-panel {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-panel .field {
+  margin-top: 10px;
+}
+
+.ai-panel code {
+  word-break: break-all;
+}
