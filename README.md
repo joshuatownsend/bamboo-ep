@@ -44,15 +44,38 @@ documentation — only by asking. The probe asks them:
 3. Which sources does this company actually populate — Training records, the
    `employeeCertifications` table, Employee Files, or some combination?
 
+The key is passed through the environment rather than as a flag, so it does not
+land in your shell history.
+
+**PowerShell** (note: `VAR=value cmd` is bash-only and fails here):
+
+```powershell
+pnpm install
+
+$env:BAMBOO_API_KEY = "your-key"
+pnpm probe --subdomain your-company
+
+# Optionally capture the result (credentials are stripped before writing):
+pnpm probe --subdomain your-company --json probe-report.json
+
+# $env: persists for the whole session; clear it when you are done:
+Remove-Item Env:\BAMBOO_API_KEY
+```
+
+**Bash / zsh / Git Bash:**
+
 ```bash
 pnpm install
 
-# The key goes in the environment so it never lands in shell history.
 BAMBOO_API_KEY=your-key pnpm probe --subdomain your-company
 
 # Optionally capture the result (credentials are stripped before writing):
 BAMBOO_API_KEY=your-key pnpm probe --subdomain your-company --json probe-report.json
 ```
+
+If you omit the environment variable entirely, the probe prompts for the key
+instead, which sidesteps the shell difference. Note that the prompt echoes what
+you type, so prefer the environment variable if anyone can see your screen.
 
 The probe writes nothing to BambooHR and downloads no files. Every check is reported
 independently, so one refusal does not hide the rest.
@@ -92,6 +115,8 @@ proposes pairings and requires you to confirm them before writing anything. Conf
 pairings are remembered, so corrections are made once.
 
 ## Run the desktop app
+
+These commands are identical in PowerShell and bash:
 
 ```bash
 pnpm install
