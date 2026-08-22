@@ -91,11 +91,37 @@ document category, and upload-date proximity — and it is treated as one: the a
 proposes pairings and requires you to confirm them before writing anything. Confirmed
 pairings are remembered, so corrections are made once.
 
+## Run the desktop app
+
+```bash
+pnpm install
+pnpm --filter @bamboo-ep/core build   # the app imports core's build output
+pnpm --filter @bamboo-ep/desktop tauri dev
+```
+
+Requires the Rust toolchain. The app walks through four steps — connect, check
+access, review matches, save — and writes nothing until you have reviewed the
+proposed file-to-record pairings.
+
+Output folder contents:
+
+| File | Purpose |
+|---|---|
+| `<Certification>.pdf` etc. | One file per certificate, named from your template. |
+| `Training Summary.pdf` | Printable list of every record, including those with no file. |
+| `Training Summary.csv` | The same list as a spreadsheet. |
+| `manifest.json` | Machine-readable record of everything. **Part 2 reads this.** |
+
+Your API key is stored in the operating system's credential manager (Windows
+Credential Manager, macOS Keychain, Linux Secret Service) — never in a config
+file. Stronghold was considered and rejected: its vault password would mean
+asking every employee to invent a second secret in order to store the first.
+
 ## Development
 
 ```bash
 pnpm install
-pnpm test        # 67 unit tests
+pnpm test        # 81 unit tests in packages/core
 pnpm typecheck
 ```
 
