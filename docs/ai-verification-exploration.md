@@ -1,6 +1,8 @@
 # Exploration: AI verification of certificate files
 
-**Status:** explored, decisions recorded 2026-08-22 (see bottom). No code written yet.
+**Status:** built 2026-08-22. All six build-order steps are implemented and committed; see
+"What was actually built" at the bottom for where each one landed and how it differs from
+the sketch above.
 
 ## The idea
 
@@ -341,3 +343,66 @@ nothing, which is what keeps the warning credible rather than trained-away.
    `core` reusing the `matching.ts` tokenizer.
 6. **Review screen integration.** Third confidence signal per row: confirms / contradicts
    (naming the better record) / inconclusive / wrong person.
+
+
+---
+
+## What was actually built
+
+All six steps shipped on `part-1-desktop-app`. Where the implementation departs from the
+sketch above, the reason is recorded here rather than left as a silent difference.
+
+| Step | Landed in | Note |
+|---|---|---|
+| 1. Rasteriser + thumbnails | `apps/desktop/src/preview.ts`, `usePreviews.ts`, `components/CertificatePreview.tsx` | pdf.js in the webview, not pdfium in Rust |
+| 2. Employee name | `packages/core/src/bamboo.ts` (`getSelf`), `identity.ts` | Same request, `fields=` param, with a bare-call fallback |
+| 3. Manifest v2 | `packages/core/src/manifest.ts`, `pull.ts` | Plus `summary.verified` / `summary.contradicted` |
+| 4. AI client | `apps/desktop/src-tauri/src/ai.rs` | `reqwest`, not `tauri-plugin-http` |
+| 5. Extraction + comparison | `packages/core/src/verify.ts`, `apps/desktop/src/useVerification.ts` | Prompt and schema live in `core` beside the parser |
+| 6. Review integration | `apps/desktop/src/screens/ReviewScreen.tsx`, `components/VerificationSignal.tsx` | Third signal per row, plus a bulk flagged-only sweep |
+
+### Decisions taken during the build
+
+**pdf.js in the webview rather than `pdfium-render` in Rust.** The bytes have to reach the
+webview to be displayed at all, and one canvas render produces both the thumbnail and the
+image sent to the model. A Rust rasteriser would have meant rendering twice or shuttling
+images back across the bridge, for no benefit. Cost: a 1.2 MB worker asset in the bundle,
+and three CSP directives (`script-src 'wasm-unsafe-eval'`, `worker-src blob:`,
+`img-src blob:`).
+
+**The AI key is never returned to the webview.** The BambooHR key still is — `load_api_key`
+predates this and the probe needs it in `core` — but there was no reason to repeat that for
+the provider key. The web layer gets `save_ai_key`, `has_ai_key`, `delete_ai_key`, and the
+request itself is built in Rust, so the secret goes from the keychain to the wire without
+ever being a JavaScript string.
+
+**Only https, or loopback.** A user-supplied base URL is where scans of someone's identity
+documents get sent. Plain HTTP to a real host is refused outright; loopback is exempt
+because it never reaches a network, and is how Ollama and LM Studio are addressed — the
+configuration that sends nothing anywhere.
+
+**`json_object`, not `json_schema`, on OpenAI-compatible endpoints.** Most servers that call
+themselves compatible reject the stricter form. The schema is in the prompt regardless, and
+`parseExtraction` in `core` is what actually enforces the shape — so strictness at the API
+buys nothing and would lock out exactly the local models the privacy story depends on.
+
+**The verification carries its file id.** A verdict is about a PAIR, not a record. Verifying
+a row and then repointing it must lose the verdict; `executePull` re-checks the id before
+writing, and the Review screen forgets the check as soon as the row moves. Without this, the
+manifest could ship a confident claim about a document nobody looked at.
+
+**A contradiction becomes a manifest warning.** Decision 4 said warn, not block, so the
+certificate is still downloaded, still written, and still reaches the manifest — the warning
+text names the record the document appears to belong to instead, which is only possible
+because the comparison stayed in local code sharing the matcher's tokeniser.
+
+### Not done
+
+- The person check has never been run against a live BambooHR tenant, so whether
+  `preferredName` exists on this account is still unverified. The fallback path is tested;
+  the happy path is not.
+- No end-to-end run against a real provider key. Every layer is unit-tested — including the
+  Anthropic and OpenAI envelope unwrapping in Rust — but the two have not been connected.
+- The CSV and PDF summaries carry no verification column. Contradictions reach the exported
+  folder through `manifest.warnings`, which the result screen shows, and through
+  `manifest.entries[].verification`. Adding a column was deliberately left out of scope.
