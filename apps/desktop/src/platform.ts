@@ -1,7 +1,6 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { mkdir, writeFile, exists, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { load } from "@tauri-apps/plugin-store";
 import type { FetchLike } from "@bamboo-ep/core";
 
@@ -90,31 +89,28 @@ export async function chooseOutputDirectory(): Promise<string | null> {
   });
   return typeof selected === "string" ? selected : null;
 }
-
 /**
  * Returns a writer bound to one directory. `core` calls it with a bare
  * filename and never learns the path, which keeps path handling - and the
  * platform separator - out of the portable code.
+ *
+ * Writes go through our own Rust command rather than `tauri-plugin-fs`. That
+ * plugin grants its path scope as a side effect of the folder dialog, so a
+ * remembered output folder - picked in an earlier session - was rejected as a
+ * "forbidden path" on every later run that skipped the dialog.
  */
 export function directoryWriter(
   directory: string,
 ): (filename: string, bytes: Uint8Array) => Promise<void> {
   return async (filename, bytes) => {
-    const path = joinPath(directory, filename);
-    await writeFile(path, bytes);
+    await invoke("write_export_file", {
+      directory,
+      filename,
+      contents: Array.from(bytes),
+    });
   };
 }
 
-export async function ensureDirectory(path: string): Promise<void> {
-  if (!(await exists(path))) {
-    await mkdir(path, { recursive: true });
-  }
+export async function ensureDirectory(directory: string): Promise<void> {
+  await invoke("ensure_export_directory", { directory });
 }
-
-/** Windows accepts forward slashes, so one join works on every platform. */
-export function joinPath(directory: string, filename: string): string {
-  const trimmed = directory.replace(/[\\/]+$/, "");
-  return `${trimmed}/${filename}`;
-}
-
-export { BaseDirectory };

@@ -9,9 +9,6 @@
     "store:default",
     "dialog:allow-open",
     "dialog:allow-message",
-    "fs:allow-write-file",
-    "fs:allow-mkdir",
-    "fs:allow-exists",
     {
       "identifier": "http:default",
       "allow": [
