@@ -35,20 +35,34 @@ export function VerificationSignal({ state, nameOf, onRetry }: Props) {
     );
   }
 
-  return <Verdicts verification={state.verification} nameOf={nameOf} />;
+  return (
+    <Verdicts verification={state.verification} nameOf={nameOf} onRetry={onRetry} />
+  );
 }
 
 function Verdicts({
   verification,
   nameOf,
+  onRetry,
 }: {
   verification: Verification;
   nameOf: (itemKey: string) => string | undefined;
+  onRetry: () => void;
 }) {
   const { verdicts, extracted, suggestedItemKey, provider, error } = verification;
 
   if (error) {
-    return <div className="sub verdict-failed">{provider} could not read this page: {error}</div>;
+    return (
+      <div className="sub verdict-failed">
+        {provider} could not read this page: {error}
+        {/* A model that answered unusably is a completed check with nothing in
+            it. Without a way back to "run it again" the row would be stuck,
+            re-runnable only by repointing it away and back. */}
+        <button type="button" className="link-button" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    );
   }
 
   const problems: string[] = [];
