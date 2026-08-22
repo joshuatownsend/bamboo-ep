@@ -30,9 +30,15 @@ interface Props {
   onDownload: (
     confirmed: Record<string, string>,
     excludedItemKeys: string[],
-    /** Only the pairings the user actually changed, for persistence. */
-    userEdited: Record<string, string>,
+    /**
+     * The complete set of choices to remember, REPLACING what was stored.
+     * Replacement rather than merge is what lets a cleared pairing actually
+     * be forgotten.
+     */
+    nextSaved: Record<string, string>,
   ) => void;
+  /** Discard every saved choice for this company and re-match from scratch. */
+  onClearSaved: () => void;
   onBack: () => void;
 }
 
@@ -42,6 +48,7 @@ export function ReviewScreen({
   busy,
   onSettingsChange,
   onDownload,
+  onClearSaved,
   onBack,
 }: Props) {
   // itemKey -> fileId. Seeded from the proposed plan, then edited freely.
@@ -113,18 +120,27 @@ export function ReviewScreen({
   const submit = () => {
     // core keys confirmations by fileId, since a file backs at most one record.
     const confirmed: Record<string, string> = {};
-    const userEdited: Record<string, string> = {};
+    const nextSaved: Record<string, string> = {};
+
     for (const [itemKey, fileId] of Object.entries(assignments)) {
       if (excluded.has(itemKey) || !fileId) continue;
       confirmed[fileId] = itemKey;
-      // Only a pairing the user actually CHANGED is remembered. Persisting
-      // accepted suggestions too would harden a guess into a permanent
-      // "confirmed" mapping that bypasses scoring on every later run - so a
-      // wrong guess could never be corrected by improving the matcher.
-      if (proposed[itemKey] !== fileId) userEdited[fileId] = itemKey;
+
+      // Remember a pairing only when the user chose it: either they changed
+      // it now, or it is a choice they made on an earlier run and have left
+      // in place. An accepted suggestion is NOT remembered - hardening a
+      // guess would make it immune to later matcher improvements.
+      const changedNow = proposed[itemKey] !== fileId;
+      const keptEarlierChoice = matchByItem.get(itemKey)?.confirmedByUser === true;
+      if (changedNow || keptEarlierChoice) nextSaved[fileId] = itemKey;
     }
-    onDownload(confirmed, [...excluded], userEdited);
+
+    // nextSaved REPLACES what was stored, so a pairing the user cleared or
+    // repointed disappears instead of resurfacing on the next run.
+    onDownload(confirmed, [...excluded], nextSaved);
   };
+
+  const savedCount = workspace.plan.matches.filter((m) => m.confirmedByUser).length;
 
   return (
     <div className="screen screen-wide">
@@ -216,6 +232,19 @@ export function ReviewScreen({
                         </option>
                       ))}
                     </select>
+                    {assigned && !isExcluded && (
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => {
+                          const next = { ...assignments };
+                          delete next[item.key];
+                          setAssignments(next);
+                        }}
+                      >
+                        Clear — free this file for another record
+                      </button>
+                    )}
                     {match && assigned === match.fileId && (
                       <div className={`sub confidence-${match.confidence}`}>
                         {match.confirmedByUser
@@ -299,6 +328,19 @@ export function ReviewScreen({
             {settings.outputDir ?? "Choose a folder…"}
           </button>
         </div>
+
+        {savedCount > 0 && (
+          <div className="field">
+            <span className="field-label">Saved choices</span>
+            <button type="button" className="secondary full" onClick={onClearSaved}>
+              Forget {savedCount} saved match{savedCount === 1 ? "" : "es"}
+            </button>
+            <span className="field-hint">
+              Choices you made on an earlier run are being reused and are shown as
+              “Your earlier choice”. Forget them to match everything from scratch.
+            </span>
+          </div>
+        )}
 
         <p className="aside-note">
           Every record is written to the summary, including those with no certificate file —

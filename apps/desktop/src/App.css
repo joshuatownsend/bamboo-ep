@@ -495,3 +495,23 @@ code {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+/* An inline, low-weight action inside a table cell. Deliberately not a
+   .secondary button: it must read as a modifier of the row's control, not as
+   a peer of the page's primary actions. */
+.link-button {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--text);
+}

@@ -125,7 +125,7 @@ export default function App() {
     async (
       confirmed: Record<string, string>,
       excludedItemKeys: string[],
-      userEdited: Record<string, string>,
+      nextSaved: Record<string, string>,
     ) => {
       if (!client || !connection || !workspace) return;
 
@@ -183,17 +183,15 @@ export default function App() {
         );
         setStep("result");
 
-        // Remember only the corrections the user actually made. Storing
-        // accepted suggestions would freeze them past any matcher improvement.
+        // REPLACE this company's saved choices rather than merging into them.
+        // Merging could only ever add, so a pairing the user cleared kept
+        // coming back on the next run with no way to remove it.
         await persist({
           ...settings,
           outputDir: directory,
           confirmedMatches: {
             ...settings.confirmedMatches,
-            [connection.credentials.subdomain]: {
-              ...(settings.confirmedMatches[connection.credentials.subdomain] ?? {}),
-              ...userEdited,
-            },
+            [connection.credentials.subdomain]: nextSaved,
           },
         });
       } catch (err) {
@@ -205,6 +203,29 @@ export default function App() {
     },
     [client, connection, persist, settings, workspace],
   );
+
+  /** Discard saved choices for this company and re-run matching from scratch. */
+  const handleClearSaved = useCallback(async () => {
+    if (!client || !connection) return;
+    const subdomain = connection.credentials.subdomain;
+
+    const next: Settings = {
+      ...settings,
+      confirmedMatches: { ...settings.confirmedMatches, [subdomain]: {} },
+    };
+    await persist(next);
+
+    setBusy("Re-matching your records…");
+    try {
+      // Deliberately gathered with no confirmations, so every pairing is
+      // scored fresh rather than inherited.
+      setWorkspace(await gatherWorkspace(client, connection, { confirmed: {} }));
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [client, connection, persist, settings]);
 
   const restart = useCallback(() => {
     setStep("setup");
@@ -288,6 +309,7 @@ export default function App() {
             busy={busy != null}
             onSettingsChange={persist}
             onDownload={handleDownload}
+            onClearSaved={handleClearSaved}
             onBack={() => setStep("probe")}
           />
         )}
