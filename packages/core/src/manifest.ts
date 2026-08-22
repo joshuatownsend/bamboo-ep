@@ -1,4 +1,6 @@
 import type { TrainingItem } from "./types.js";
+import { isTroubling } from "./verify.js";
+import type { Verification } from "./verify.js";
 
 /**
  * The manifest is the contract between Part 1 (this app) and Part 2 (the
@@ -10,7 +12,13 @@ import type { TrainingItem } from "./types.js";
  * record it came from, and whether a record exists with no file at all.
  */
 
-export const MANIFEST_VERSION = 1;
+/**
+ * Version 2 added the optional `verification` block to each entry. Part 2 may
+ * ignore it and still work, but the bump is honest: a folder produced by this
+ * app now carries a claim about whether each certificate was checked, and a
+ * reader that silently discards that claim should know it is doing so.
+ */
+export const MANIFEST_VERSION = 2;
 export const MANIFEST_FILENAME = "manifest.json";
 
 export interface Manifest {
@@ -38,6 +46,13 @@ export interface Manifest {
     withFile: number;
     withoutFile: number;
     filesWithoutRecord: number;
+    /** Entries whose certificate was read and checked against the record. */
+    verified: number;
+    /**
+     * Entries where that check disagreed with the record. Surfaced at the top
+     * level so Part 2 can refuse, or warn, without walking every entry.
+     */
+    contradicted: number;
   };
   /** Non-fatal problems worth showing before an upload is attempted. */
   warnings: string[];
@@ -60,6 +75,13 @@ export interface ManifestEntry {
   certificationNumber: string | null;
   notes: string | null;
   file: ManifestFile | null;
+  /**
+   * The result of reading the document itself, when the user ran a check.
+   * Null means not checked, which is the default and is not a failure - it is
+   * the difference between "we looked and it was fine" and "we did not look",
+   * and Part 2 must be able to tell those apart.
+   */
+  verification: Verification | null;
 }
 
 export interface ManifestFile {
@@ -101,6 +123,10 @@ export function buildManifest(args: {
   warnings?: string[];
 }): Manifest {
   const withFile = args.entries.filter((e) => e.file != null).length;
+  const verified = args.entries.filter((e) => e.verification != null).length;
+  const contradicted = args.entries.filter(
+    (e) => e.verification != null && isTroubling(e.verification),
+  ).length;
   return {
     manifestVersion: MANIFEST_VERSION,
     generatedAt: args.generatedAt,
@@ -119,6 +145,8 @@ export function buildManifest(args: {
       withFile,
       withoutFile: args.entries.length - withFile,
       filesWithoutRecord: args.orphanFileCount,
+      verified,
+      contradicted,
     },
     warnings: args.warnings ?? [],
   };

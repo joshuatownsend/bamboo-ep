@@ -9,4 +9,5 @@ export * from "./naming.js";
 export * from "./matching.js";
 export * from "./manifest.js";
 export * from "./summary.js";
+export * from "./verify.js";
 export * from "./pull.js";

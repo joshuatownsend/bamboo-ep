@@ -371,3 +371,85 @@ describe("runPool", () => {
     await expect(runPool([], 4, async () => {})).resolves.toBeUndefined();
   });
 });
+
+describe("executePull: document checks in the manifest", () => {
+  const verification = (bambooFileId: string, name: "confirms" | "contradicts") => ({
+    provider: "anthropic",
+    model: "claude-opus-5",
+    verifiedAt: "2026-01-15T00:00:00.000Z",
+    bambooFileId,
+    extracted: {
+      certificationName: "CPR BLS",
+      issuedDate: "2025-06-01",
+      expirationDate: null,
+      personName: "Joshua Townsend",
+      documentType: "certificate" as const,
+      legible: true,
+    },
+    verdicts: { name, date: "confirms" as const, person: "confirms" as const },
+    suggestedItemKey: null,
+    error: null,
+  });
+
+  const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+  const files = [file({ id: "100", name: "cpr" }), file({ id: "200", name: "other" })];
+
+  it("records the check alongside the file it examined", async () => {
+    const fs = memoryFs();
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": verification("100", "confirms") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.manifestVersion).toBe(2);
+    expect(manifest.entries[0]?.verification?.bambooFileId).toBe("100");
+    expect(manifest.summary.verified).toBe(1);
+    expect(manifest.summary.contradicted).toBe(0);
+  });
+
+  // The pairing is what was checked. Repointing the row afterwards makes the
+  // verdict a claim about a document nobody looked at.
+  it("drops a check whose row was repointed at a different file", async () => {
+    const fs = memoryFs();
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "200": "training:1" },
+        verifications: { "training:1": verification("100", "confirms") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    expect(readManifest(fs).entries[0]?.verification).toBeNull();
+  });
+
+  // Decision: a contradicted check warns, it never blocks. The certificate is
+  // still downloaded and still reaches the manifest.
+  it("warns about a contradiction without withholding the file", async () => {
+    const fs = memoryFs();
+    const result = await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": verification("100", "contradicts") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    expect(result.filesWritten).toHaveLength(1);
+    const manifest = readManifest(fs);
+    expect(manifest.summary.contradicted).toBe(1);
+    expect(manifest.warnings.join(" ")).toMatch(/CPR BLS: the saved certificate was checked/);
+  });
+});
