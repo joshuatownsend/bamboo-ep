@@ -27,7 +27,12 @@ interface Props {
   settings: Settings;
   busy: boolean;
   onSettingsChange: (settings: Settings) => void;
-  onDownload: (confirmed: Record<string, string>, excludedItemKeys: string[]) => void;
+  onDownload: (
+    confirmed: Record<string, string>,
+    excludedItemKeys: string[],
+    /** Only the pairings the user actually changed, for persistence. */
+    userEdited: Record<string, string>,
+  ) => void;
   onBack: () => void;
 }
 
@@ -40,9 +45,11 @@ export function ReviewScreen({
   onBack,
 }: Props) {
   // itemKey -> fileId. Seeded from the proposed plan, then edited freely.
-  const [assignments, setAssignments] = useState<Record<string, string>>(() =>
-    Object.fromEntries(workspace.plan.matches.map((m) => [m.itemKey, m.fileId])),
+  const proposed = useMemo(
+    () => Object.fromEntries(workspace.plan.matches.map((m) => [m.itemKey, m.fileId])),
+    [workspace.plan.matches],
   );
+  const [assignments, setAssignments] = useState<Record<string, string>>(proposed);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
 
   const filesById = useMemo(
@@ -106,10 +113,17 @@ export function ReviewScreen({
   const submit = () => {
     // core keys confirmations by fileId, since a file backs at most one record.
     const confirmed: Record<string, string> = {};
+    const userEdited: Record<string, string> = {};
     for (const [itemKey, fileId] of Object.entries(assignments)) {
-      if (!excluded.has(itemKey) && fileId) confirmed[fileId] = itemKey;
+      if (excluded.has(itemKey) || !fileId) continue;
+      confirmed[fileId] = itemKey;
+      // Only a pairing the user actually CHANGED is remembered. Persisting
+      // accepted suggestions too would harden a guess into a permanent
+      // "confirmed" mapping that bypasses scoring on every later run - so a
+      // wrong guess could never be corrected by improving the matcher.
+      if (proposed[itemKey] !== fileId) userEdited[fileId] = itemKey;
     }
-    onDownload(confirmed, [...excluded]);
+    onDownload(confirmed, [...excluded], userEdited);
   };
 
   return (

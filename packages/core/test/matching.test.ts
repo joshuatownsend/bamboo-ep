@@ -43,6 +43,99 @@ describe("tokenize", () => {
   });
 });
 
+describe("tokenize: level and module numbers", () => {
+  // Regression: single-character tokens were dropped, so "Module 1" and
+  // "Module 2" tokenized identically and were assigned arbitrarily. Two real
+  // certificates were swapped in a live run because of this.
+  it("keeps single digits, which are often the only distinguishing token", () => {
+    expect([...tokenize("Intro to Technical Rescue Module 1")]).toContain("1");
+    expect([...tokenize("Intro to Technical Rescue Module 2")]).toContain("2");
+  });
+
+  it("still drops single letters, which carry no signal", () => {
+    expect([...tokenize("Fire X Safety")]).not.toContain("x");
+  });
+
+  it("normalises roman numerals so II matches 2", () => {
+    expect([...tokenize("Firefighter II")]).toContain("2");
+    expect([...tokenize("Fire Officer IV")]).toContain("4");
+  });
+});
+
+describe("scorePair: number conflicts", () => {
+  const modules = (n: number) =>
+    item({ key: `training:${n}`, name: `Intro to Technical Rescue Module ${n}` });
+  const moduleFile = (n: number) =>
+    file({
+      id: `${n}`,
+      name: `Introduction to Technical Rescue Module ${n}`,
+      originalFileName: `jtownsend_Introduction-to-Technical-Rescue-Module-${n}_2016.pdf`,
+    });
+
+  it("scores the matching module far above the mismatched one", () => {
+    const right = scorePair(modules(1), moduleFile(1));
+    const wrong = scorePair(modules(1), moduleFile(2));
+    expect(right.score).toBeGreaterThan(wrong.score);
+    expect(wrong.reasons.join(" ")).toMatch(/Numbers disagree/);
+  });
+
+  it("matches a roman-numeral certification to its digit-spelled file", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "Firefighter II (NFPA-1001)" }),
+      file({
+        id: "9",
+        name: "Firefighter 2",
+        originalFileName: "jtownsend_Firefighter-2-NFPA-1001-_2016.pdf",
+      }),
+    );
+    expect(result.reasons.join(" ")).toMatch(/Numbers agree/);
+    expect(result.confidence).not.toBe("low");
+  });
+
+  it("separates Fire Officer 2 from a Fire Officer IV certificate", () => {
+    const wrong = scorePair(
+      item({ key: "training:1", name: "Fire Officer 2" }),
+      file({ id: "9", name: "fire officer IV certificate" }),
+    );
+    expect(wrong.reasons.join(" ")).toMatch(/Numbers disagree/);
+  });
+
+  it("stays quiet when only one side carries a number", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "Bloodborne Pathogens" }),
+      file({ id: "9", name: "bloodborne pathogens 2024" }),
+    );
+    expect(result.reasons.join(" ")).not.toMatch(/Numbers disagree/);
+  });
+});
+
+describe("buildMatchPlan: real-world module swap", () => {
+  it("does not swap two modules that differ only by number", () => {
+    const items = [
+      item({ key: "training:1", name: "Intro to Technical Rescue Module 1" }),
+      item({ key: "training:2", name: "Intro to Technical Rescue Module 2" }),
+    ];
+    const files = [
+      file({
+        id: "100",
+        name: "Introduction to Technical Rescue Module 1",
+        originalFileName: "Introduction-to-Technical-Rescue-Module-1_2016.pdf",
+      }),
+      file({
+        id: "200",
+        name: "Introduction to Technical Rescue Module 2",
+        originalFileName: "Introduction-to-Technical-Rescue-Module-2_2016.pdf",
+      }),
+    ];
+
+    const pairs = Object.fromEntries(
+      buildMatchPlan(items, files).matches.map((m) => [m.itemKey, m.fileId]),
+    );
+    expect(pairs["training:1"]).toBe("100");
+    expect(pairs["training:2"]).toBe("200");
+  });
+});
+
 describe("tokenOverlap", () => {
   it("measures against the certification, not the file, so noisy filenames are not penalised", () => {
     const result = tokenOverlap(

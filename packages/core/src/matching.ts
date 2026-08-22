@@ -140,6 +140,30 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
     }
   }
 
+  // A level or module number is the whole difference between two otherwise
+  // identical certifications, so a conflict here is strong evidence against
+  // the pairing - stronger than the word overlap is evidence for it.
+  const certNumbers = numericTokens(item.name);
+  // Per-field, not concatenated: the duplicate-suffix strip is anchored to the
+  // end of a filename, which a concatenation would hide.
+  const fileNumbers = new Set([
+    ...numericTokens(file.name),
+    ...numericTokens(file.originalFileName ?? ""),
+  ]);
+  if (certNumbers.size > 0 && fileNumbers.size > 0) {
+    const shared = [...certNumbers].filter((n) => fileNumbers.has(n));
+    if (shared.length > 0) {
+      score += 0.15;
+      reasons.push(`Numbers agree (${shared.slice(0, 2).join(", ")})`);
+    } else {
+      score -= 0.4;
+      reasons.push(
+        `Numbers disagree (${[...certNumbers].slice(0, 2).join(", ")} vs ` +
+          `${[...fileNumbers].slice(0, 2).join(", ")})`,
+      );
+    }
+  }
+
   const proximity = dateProximity(item.completed, file.dateCreated);
   if (proximity != null) {
     score += proximity.weight;
@@ -174,14 +198,49 @@ export function tokenOverlap(
   return { ratio: shared.length / certTokens.size, shared };
 }
 
+/**
+ * Roman numerals appear constantly in certification levels ("Firefighter II",
+ * "Fire Officer IV") while the uploaded file spells the same level with a
+ * digit. Normalising both to digits lets them match, and - more importantly -
+ * lets a genuine MISmatch be detected.
+ */
+const ROMAN_NUMERALS: Readonly<Record<string, string>> = {
+  i: "1", ii: "2", iii: "3", iv: "4", v: "5",
+  vi: "6", vii: "7", viii: "8", ix: "9", x: "10",
+};
+
 export function tokenize(input: string): Set<string> {
   const stem = stemOf(input) ?? input;
   const tokens = stem
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(" ")
-    .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
+    .filter((t) => t !== "")
+    .map((t) => ROMAN_NUMERALS[t] ?? t)
+    // Single characters carry no signal EXCEPT digits, which are often the
+    // only thing distinguishing "Module 1" from "Module 2". Dropping them
+    // made those two score identically and get assigned arbitrarily.
+    .filter((t) => (t.length > 1 || /^[0-9]$/.test(t)) && !STOP_WORDS.has(t));
   return new Set(tokens);
+}
+
+/**
+ * The numeric tokens that identify a certification: levels, module numbers,
+ * and standard numbers such as NFPA 1001.
+ *
+ * Years are excluded because they date the document rather than identify the
+ * certification, and a browser's " (1)" duplicate-download suffix is stripped
+ * for the same reason - both produced false conflicts against real files.
+ */
+export function numericTokens(input: string): Set<string> {
+  const cleaned = input.replace(/\s\(\d+\)(?=\.[a-z0-9]+$|$)/i, "");
+  return new Set(
+    [...tokenize(cleaned)].filter((t) => /^[0-9]+$/.test(t) && !isYear(t)),
+  );
+}
+
+function isYear(token: string): boolean {
+  return /^(19|20)\d{2}$/.test(token);
 }
 
 /**

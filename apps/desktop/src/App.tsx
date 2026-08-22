@@ -122,7 +122,11 @@ export default function App() {
    * than no certificates.
    */
   const handleDownload = useCallback(
-    async (confirmed: Record<string, string>, excludedItemKeys: string[]) => {
+    async (
+      confirmed: Record<string, string>,
+      excludedItemKeys: string[],
+      userEdited: Record<string, string>,
+    ) => {
       if (!client || !connection || !workspace) return;
 
       const directory = settings.outputDir ?? (await chooseOutputDirectory());
@@ -179,13 +183,17 @@ export default function App() {
         );
         setStep("result");
 
-        // Remember the user's corrections so the next run does not re-guess.
+        // Remember only the corrections the user actually made. Storing
+        // accepted suggestions would freeze them past any matcher improvement.
         await persist({
           ...settings,
           outputDir: directory,
           confirmedMatches: {
             ...settings.confirmedMatches,
-            [connection.credentials.subdomain]: confirmed,
+            [connection.credentials.subdomain]: {
+              ...(settings.confirmedMatches[connection.credentials.subdomain] ?? {}),
+              ...userEdited,
+            },
           },
         });
       } catch (err) {
