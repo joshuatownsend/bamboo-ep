@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   DEFAULT_TEMPLATE,
   FilenameAllocator,
@@ -11,6 +11,9 @@ import { SUMMARY_PDF_FILENAME } from "../pdf";
 import type { Workspace } from "@bamboo-ep/core";
 import { chooseOutputDirectory } from "../platform";
 import type { Settings } from "../platform";
+import { renderPreview } from "../preview";
+import { usePreviews } from "../usePreviews";
+import { CertificatePreview, PreviewLightbox } from "../components/CertificatePreview";
 
 /**
  * Match review.
@@ -40,6 +43,13 @@ interface Props {
   /** Discard every saved choice for this company and re-match from scratch. */
   onClearSaved: () => void;
   onBack: () => void;
+  /**
+   * Fetches one file's bytes without writing anything. Injected rather than
+   * built here so this screen stays unaware of BambooHR and of Tauri.
+   */
+  loadFileBytes: (
+    fileId: string,
+  ) => Promise<{ bytes: Uint8Array; contentType: string | null }>;
 }
 
 export function ReviewScreen({
@@ -50,6 +60,7 @@ export function ReviewScreen({
   onDownload,
   onClearSaved,
   onBack,
+  loadFileBytes,
 }: Props) {
   // itemKey -> fileId. Seeded from the proposed plan, then edited freely.
   const proposed = useMemo(
@@ -68,6 +79,21 @@ export function ReviewScreen({
     [workspace.plan.matches],
   );
 
+  // The original filename is what tells a PDF from a JPEG when BambooHR serves
+  // the file as octet-stream, so the renderer is built here where the file
+  // metadata lives rather than inside the caching hook.
+  const renderFile = useCallback(
+    async (fileId: string) => {
+      const file = workspace.files.find((f) => f.id === fileId);
+      const { bytes, contentType } = await loadFileBytes(fileId);
+      return renderPreview(bytes, contentType, file?.originalFileName ?? file?.name ?? null);
+    },
+    [loadFileBytes, workspace.files],
+  );
+  const pagePreviews = usePreviews(renderFile);
+  const [zoomed, setZoomed] = useState<{ fileId: string; label: string } | null>(null);
+  const zoomedState = zoomed ? pagePreviews.stateOf(zoomed.fileId) : null;
+
   /** A file may back only one record, so offer only what is still free. */
   const availableFilesFor = (itemKey: string) => {
     const claimed = new Set(
@@ -80,7 +106,7 @@ export function ReviewScreen({
 
   // Preview the filenames live, using the same allocator the pull will use so
   // collision suffixes shown here are the ones actually written.
-  const previews = useMemo(() => {
+  const savedAsPreviews = useMemo(() => {
     // Same reservations the pull makes, so the preview shows the collision
     // suffixes that will actually be written.
     const allocator = new FilenameAllocator([
@@ -115,7 +141,7 @@ export function ReviewScreen({
   }, [assignments, excluded, filesById, settings.filenameTemplate, workspace.items]);
 
   const selectedCount = workspace.items.filter((i) => !excluded.has(i.key)).length;
-  const withFileCount = previews.size;
+  const withFileCount = savedAsPreviews.size;
 
   const submit = () => {
     // core keys confirmations by fileId, since a file backs at most one record.
@@ -142,6 +168,16 @@ export function ReviewScreen({
 
   const savedCount = workspace.plan.matches.filter((m) => m.confirmedByUser).length;
 
+  const assignedFileIds = useMemo(
+    () =>
+      workspace.items
+        .filter((i) => !excluded.has(i.key))
+        .map((i) => assignments[i.key])
+        .filter((id): id is string => Boolean(id)),
+    [assignments, excluded, workspace.items],
+  );
+  const unrenderedCount = pagePreviews.pendingCount(assignedFileIds);
+
   return (
     <div className="screen screen-wide">
       <div className="screen-main">
@@ -161,10 +197,28 @@ export function ReviewScreen({
           </div>
         )}
 
+        <div className="review-toolbar">
+          <button
+            type="button"
+            className="secondary"
+            disabled={unrenderedCount === 0}
+            onClick={() => void pagePreviews.requestAll(assignedFileIds)}
+          >
+            {unrenderedCount === 0
+              ? "All pages shown"
+              : `Show all ${unrenderedCount} certificate page${unrenderedCount === 1 ? "" : "s"}`}
+          </button>
+          <span className="field-hint">
+            Reading each page is the fastest way to catch a certificate paired with the
+            wrong record. Nothing is saved to your computer by doing this.
+          </span>
+        </div>
+
         <table className="review-table">
           <thead>
             <tr>
               <th className="col-include">Include</th>
+              <th className="col-preview">Page 1</th>
               <th>Certification</th>
               <th>Completed</th>
               <th>Certificate file</th>
@@ -190,6 +244,19 @@ export function ReviewScreen({
                         setExcluded(next);
                       }}
                     />
+                  </td>
+
+                  <td className="col-preview">
+                    {assigned ? (
+                      <CertificatePreview
+                        state={pagePreviews.stateOf(assigned)}
+                        label={item.name}
+                        onLoad={() => void pagePreviews.ensure(assigned).catch(() => undefined)}
+                        onZoom={() => setZoomed({ fileId: assigned, label: item.name })}
+                      />
+                    ) : (
+                      <div className="preview-thumb preview-thumb-empty">No file</div>
+                    )}
                   </td>
 
                   <td>
@@ -255,7 +322,7 @@ export function ReviewScreen({
                   </td>
 
                   <td className="muted mono">
-                    {isExcluded ? "—" : (previews.get(item.key) ?? "No file to save")}
+                    {isExcluded ? "—" : (savedAsPreviews.get(item.key) ?? "No file to save")}
                   </td>
                 </tr>
               );
@@ -340,6 +407,14 @@ export function ReviewScreen({
               “Your earlier choice”. Forget them to match everything from scratch.
             </span>
           </div>
+        )}
+
+        {zoomed && zoomedState?.status === "ready" && (
+          <PreviewLightbox
+            dataUrl={zoomedState.preview.dataUrl}
+            label={zoomed.label}
+            onClose={() => setZoomed(null)}
+          />
         )}
 
         <p className="aside-note">

@@ -204,6 +204,23 @@ export default function App() {
     [client, connection, persist, settings, workspace],
   );
 
+  /**
+   * Read one file's bytes without writing anything, for the review previews.
+   * This is a read, so it belongs to phase 1 - the two-phase split is about
+   * not WRITING before the user has confirmed, not about not looking.
+   */
+  const loadFileBytes = useCallback(
+    async (fileId: string) => {
+      if (!client || !connection) throw new Error("Not connected to BambooHR.");
+      const { bytes, contentType } = await client.downloadFile(
+        connection.employeeId,
+        fileId,
+      );
+      return { bytes, contentType };
+    },
+    [client, connection],
+  );
+
   /** Discard saved choices for this company and re-run matching from scratch. */
   const handleClearSaved = useCallback(async () => {
     if (!client || !connection) return;
@@ -311,6 +328,7 @@ export default function App() {
             onDownload={handleDownload}
             onClearSaved={handleClearSaved}
             onBack={() => setStep("probe")}
+            loadFileBytes={loadFileBytes}
           />
         )}
 
