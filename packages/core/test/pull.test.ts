@@ -240,6 +240,25 @@ describe("executePull", () => {
     expect(readManifest(fs).entries[0]?.file?.matchedBy).toBe("user");
   });
 
+  it("never allocates a name the caller reserved for its own output", async () => {
+    // A certification literally named "Training Summary" would otherwise be
+    // written as Training Summary.pdf and then clobbered by the summary sheet.
+    const items = [item({ key: "training:1", name: "Training Summary" })];
+    const files = [file({ id: "100", name: "Training Summary" })];
+    const fs = memoryFs();
+
+    const result = await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      reservedFilenames: ["Training Summary.pdf"],
+      writeFile: fs.writeFile,
+    });
+
+    expect(result.filesWritten).toEqual(["Training Summary (2).pdf"]);
+  });
+
   it("excludes items the user deselected", async () => {
     const items = [
       item({ key: "training:1", name: "CPR BLS" }),

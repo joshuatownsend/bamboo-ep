@@ -99,7 +99,14 @@ pnpm --filter @bamboo-ep/core build   # the app imports core's build output
 pnpm --filter @bamboo-ep/desktop tauri dev
 ```
 
-Requires the Rust toolchain. The app walks through four steps — connect, check
+### Build prerequisites
+
+- **All platforms:** the Rust toolchain.
+- **Linux:** the `keyring` crate's Secret Service backend needs dbus development
+  headers (`libdbus-1-dev` on Debian/Ubuntu) plus the usual Tauri WebKitGTK
+  dependencies. Only Windows has been compiled so far — see *Not yet verified*.
+
+The app walks through four steps — connect, check
 access, review matches, save — and writes nothing until you have reviewed the
 proposed file-to-record pairings.
 
@@ -134,3 +141,21 @@ One retry rule is worth calling out because it is inverted from most APIs:
 
 - **503 means throttling** — retry, honouring `Retry-After`.
 - **429 means the account's employee-seat limit** — retrying can never help.
+
+## Not yet verified
+
+Everything below compiles and passes tests, but **no request has yet been made
+against a real BambooHR account**. In rough order of what to do first:
+
+1. **Run the probe with a real key** and fill in the Findings table above. The
+   three open questions are still open.
+2. **Click through `pnpm tauri dev`.** The keychain commands, the plugin-http
+   host allowlist, and the dialog/filesystem plugins have compiled but never
+   executed. The capability allowlist in particular can only fail at runtime —
+   if the legacy-gateway fallback works in the probe CLI but not in the app,
+   that scope is the first place to look.
+3. **A full pull against a real account** — confirm downloaded files open, that
+   filenames match the template, and that the record count matches what the
+   BambooHR web UI shows.
+4. **Packaging.** Only a Windows debug binary has been built. Signed installers
+   for Windows and macOS, notarisation, and a Linux build are all untouched.

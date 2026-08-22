@@ -146,6 +146,9 @@ export default function App() {
             includeOrphanFiles: settings.includeOrphanFiles,
           },
           filenameTemplate: settings.filenameTemplate,
+          // Claimed up front so a certification named "Training Summary"
+          // cannot be allocated the name the PDF below will take.
+          reservedFilenames: [SUMMARY_PDF_FILENAME],
           appVersion: APP_VERSION,
           writeFile: write,
           onProgress: (p) =>
@@ -154,9 +157,26 @@ export default function App() {
 
         // The printable summary is generated here rather than in core, since
         // it is presentation and core stays free of rendering dependencies.
-        await write(SUMMARY_PDF_FILENAME, buildSummaryPdf(pullResult.manifest));
+        // Its failure must not erase a pull that otherwise succeeded: the
+        // certificates and the manifest are already on disk by this point.
+        let pdfWarning: string | null = null;
+        try {
+          await write(SUMMARY_PDF_FILENAME, buildSummaryPdf(pullResult.manifest));
+        } catch (err) {
+          pdfWarning = `The printable summary could not be created: ${messageOf(err)}. Every certificate and the spreadsheet summary were still saved.`;
+        }
 
-        setResult(pullResult);
+        setResult(
+          pdfWarning
+            ? {
+                ...pullResult,
+                manifest: {
+                  ...pullResult.manifest,
+                  warnings: [...pullResult.manifest.warnings, pdfWarning],
+                },
+              }
+            : pullResult,
+        );
         setStep("result");
 
         // Remember the user's corrections so the next run does not re-guess.
@@ -241,7 +261,6 @@ export default function App() {
             settings={settings}
             busy={busy != null}
             onConnect={handleConnect}
-            onSettingsChange={persist}
           />
         )}
 

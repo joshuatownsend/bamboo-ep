@@ -1,5 +1,13 @@
 import { useMemo, useState } from "react";
-import { DEFAULT_TEMPLATE, buildFilename, FilenameAllocator, stemOf } from "@bamboo-ep/core";
+import {
+  DEFAULT_TEMPLATE,
+  FilenameAllocator,
+  MANIFEST_FILENAME,
+  SUMMARY_CSV_FILENAME,
+  buildFilename,
+  stemOf,
+} from "@bamboo-ep/core";
+import { SUMMARY_PDF_FILENAME } from "../pdf";
 import type { Workspace } from "@bamboo-ep/core";
 import { chooseOutputDirectory } from "../platform";
 import type { Settings } from "../platform";
@@ -59,7 +67,13 @@ export function ReviewScreen({
   // Preview the filenames live, using the same allocator the pull will use so
   // collision suffixes shown here are the ones actually written.
   const previews = useMemo(() => {
-    const allocator = new FilenameAllocator(["manifest.json", "Training Summary.csv"]);
+    // Same reservations the pull makes, so the preview shows the collision
+    // suffixes that will actually be written.
+    const allocator = new FilenameAllocator([
+      MANIFEST_FILENAME,
+      SUMMARY_CSV_FILENAME,
+      SUMMARY_PDF_FILENAME,
+    ]);
     const out = new Map<string, string>();
     for (const item of workspace.items) {
       if (excluded.has(item.key)) continue;

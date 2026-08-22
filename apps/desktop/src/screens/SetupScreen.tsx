@@ -17,7 +17,6 @@ interface Props {
   settings: Settings;
   busy: boolean;
   onConnect: (credentials: Credentials, remember: boolean) => void;
-  onSettingsChange: (settings: Settings) => void;
 }
 
 export function SetupScreen({ settings, busy, onConnect }: Props) {

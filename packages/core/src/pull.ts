@@ -89,6 +89,13 @@ export interface PullOptions {
   workspace: Workspace;
   decisions: PullDecisions;
   filenameTemplate?: string;
+  /**
+   * Extra names the caller will write into the same folder afterwards. They
+   * are claimed up front so a certificate can never be allocated a name that
+   * is later overwritten - the printable summary is written by the UI layer,
+   * so core cannot know its filename without being told.
+   */
+  reservedFilenames?: readonly string[];
   appVersion: string;
   /** Injected so `core` never imports a filesystem. */
   writeFile: (filename: string, bytes: Uint8Array) => Promise<void>;
@@ -143,7 +150,11 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
 
   const pairedFileIds = new Set(pairs.map((p) => p.file.id));
 
-  const allocator = new FilenameAllocator([MANIFEST_FILENAME, SUMMARY_CSV_FILENAME]);
+  const allocator = new FilenameAllocator([
+    MANIFEST_FILENAME,
+    SUMMARY_CSV_FILENAME,
+    ...(options.reservedFilenames ?? []),
+  ]);
   const failures: PullResult["failures"] = [];
   const filesWritten: string[] = [];
   const entriesByKey = new Map<string, ManifestEntry>();
