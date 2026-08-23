@@ -80,8 +80,19 @@ export default function App() {
     null,
   );
 
+  /**
+   * False until the stored settings have arrived. The setup form is not shown
+   * before then: this load overwrites `subdomain`, and a user who had already
+   * typed a company and pasted a key would have the company silently swapped
+   * under them - sending that key to whichever company was stored last.
+   */
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
   useEffect(() => {
-    void loadSettings().then(setSettings);
+    void loadSettings().then((stored) => {
+      setSettings(stored);
+      setSettingsLoaded(true);
+    });
   }, []);
 
   const client = useMemo(
@@ -493,13 +504,16 @@ export default function App() {
       )}
 
       <section className="app-body">
-        {step === "setup" && (
-          <SetupScreen
-            settings={settings}
-            busy={busy != null}
-            onConnect={handleConnect}
-          />
-        )}
+        {step === "setup" &&
+          (settingsLoaded ? (
+            <SetupScreen
+              settings={settings}
+              busy={busy != null}
+              onConnect={handleConnect}
+            />
+          ) : (
+            <p className="muted">Loading your saved settings…</p>
+          ))}
 
         {step === "probe" && report && (
           <ProbeScreen
