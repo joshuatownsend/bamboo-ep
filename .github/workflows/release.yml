@@ -1,0 +1,171 @@
+# Builds installers for Windows, macOS and Linux, and attaches them to a
+# GitHub release.
+#
+# Push a tag to publish:
+#
+#     pnpm release 0.2.0     # bumps the version files and tags
+#     git push && git push origin v0.2.0
+#
+# The release is created as a DRAFT. Nothing is downloadable until someone
+# opens it and presses publish - a deliberate gate, because these installers
+# go to employees and a tag push is easy to do by accident.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Build the installers without publishing anything, to prove the pipeline
+  # works before a real tag depends on it.
+  workflow_dispatch:
+
+jobs:
+  # A release that fails its own test suite is worse than no release: it is
+  # already on someone's machine by the time anyone notices.
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @bamboo-ep/core build
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+
+  build:
+    needs: test
+    permissions:
+      contents: write
+    strategy:
+      # One platform failing must not cancel the others: a Linux packaging
+      # problem should still leave the Windows installer built and inspectable.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+            label: Windows (.msi, .exe)
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            label: macOS Apple silicon (.dmg)
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            label: macOS Intel (.dmg)
+          - platform: ubuntu-22.04
+            args: ""
+            label: Linux (.AppImage, .deb)
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installers carry their version in the filename and in the installed
+      # program's metadata, so a tag that disagrees with the config ships a
+      # binary labelled as a version that is not what is inside it.
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
+          cargo_version=$(grep -m1 '^version = ' apps/desktop/src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "tag=$tag tauri.conf.json=$conf Cargo.toml=$cargo_version"
+          if [ "$tag" != "$conf" ] || [ "$tag" != "$cargo_version" ]; then
+            echo "::error::Tag v$tag does not match tauri.conf.json ($conf) / Cargo.toml ($cargo_version). Use 'pnpm release <version>' so all three move together."
+            exit 1
+          fi
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev
+        # libdbus-1-dev is for the keyring crate: on Linux the API key lives in
+        # the Secret Service, which is reached over D-Bus.
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Only the macOS runners cross-compile; asking for these elsewhere
+          # just slows the other two down.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./apps/desktop/src-tauri -> target"
+          # Rust builds are the slow half of this pipeline; a failed run still
+          # compiled most of the tree and that work is worth keeping.
+          cache-on-failure: true
+
+      - run: pnpm install --frozen-lockfile
+
+      # The Rust side is where the filename guard and the credential store
+      # live. Run its tests on the one runner that already has the toolchain
+      # and the system libraries installed.
+      - name: Rust tests
+        if: matrix.platform == 'ubuntu-22.04'
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
+
+      - uses: tauri-apps/tauri-action@v1
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          # Empty on a manual run, which builds the installers and attaches
+          # them to the workflow run without creating a release at all.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseDraft: true
+          prerelease: false
+          releaseBody: |
+            Download the installer for your machine below.
+
+            | If you are on | Download |
+            |---|---|
+            | Windows | the `.msi` (or `.exe` for a per-user install) |
+            | Mac with Apple silicon (M1 and later) | the `aarch64.dmg` |
+            | Mac with an Intel processor | the `x64.dmg` |
+            | Linux | the `.AppImage`, or the `.deb` on Debian/Ubuntu |
+
+            **These installers are not code-signed.** Windows SmartScreen will
+            say the publisher is unknown, and macOS will refuse the first launch
+            until you right-click the app and choose Open. That is expected for
+            now - signing needs paid certificates from Microsoft and Apple.
+          args: ${{ matrix.args }}
+
+      # On a manual run there is no release to attach to, so the installers are
+      # kept on the workflow run instead - which is the whole point of being
+      # able to fire this without tagging.
+      - name: Keep the installers when there is no release
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}-${{ strategy.job-index }}
+          # A glob rather than the action's own artifactPaths output: with
+          # --target the bundle sits under a per-target directory, and `**`
+          # covers both that and the plain layout.
+          path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
+          if-no-files-found: error

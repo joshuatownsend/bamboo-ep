@@ -206,6 +206,44 @@ One retry rule is worth calling out because it is inverted from most APIs:
 - **503 means throttling** — retry, honouring `Retry-After`.
 - **429 means the account's employee-seat limit** — retrying can never help.
 
+## Cutting a release
+
+Installers for Windows, macOS and Linux are built by GitHub Actions and attached
+to a GitHub release.
+
+```bash
+pnpm release 0.2.0          # bumps the four version files, commits, tags
+git push && git push origin v0.2.0
+```
+
+Pushing the tag starts the workflow. It runs the test suites first, then builds
+on four runners - Windows, Apple silicon, Intel Mac, Linux - and opens a **draft**
+release with the installers attached. Check them, then press publish on GitHub.
+Nothing is downloadable before that.
+
+To exercise the pipeline without releasing anything, run the *Release* workflow
+manually from the Actions tab: it builds the same installers and leaves them on
+the workflow run instead of creating a release.
+
+The version is written in four files (`package.json` twice, `tauri.conf.json`,
+`Cargo.toml`, plus `Cargo.lock`) and they must agree - the installer's filename
+and its entry in Add/Remove Programs come from `tauri.conf.json`. `pnpm release`
+moves them together and the workflow refuses to build a tag that disagrees.
+
+### The installers are not signed
+
+Windows SmartScreen will report an unknown publisher, and macOS will refuse the
+first launch until the user right-clicks the app and chooses Open. Signing needs
+a paid certificate from Microsoft and an Apple Developer account; until then the
+release notes tell people what they will see. This is a knowing deviation from
+the original plan, which called for signed installers.
+
+### The repository is private
+
+Release assets on a private repository are downloadable only by collaborators.
+Distributing to employees who are not collaborators means either making the
+repository public or hosting the installers somewhere else.
+
 ## Not yet verified
 
 Everything below compiles and passes tests, but **no request has yet been made
