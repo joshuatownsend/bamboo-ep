@@ -44,29 +44,86 @@ documentation — only by asking. The probe asks them:
 3. Which sources does this company actually populate — Training records, the
    `employeeCertifications` table, Employee Files, or some combination?
 
+The key is passed through the environment rather than as a flag, so it is not
+visible in the process list to other users on the machine while the probe runs.
+
+**It does still reach your shell history**, because the assignment itself is a
+command you typed. To keep it out, read the key from a prompt instead:
+
+```powershell
+# PowerShell — the key is never typed as part of a command
+$env:BAMBOO_API_KEY = (Read-Host "BambooHR API key" -AsSecureString |
+  ConvertFrom-SecureString -AsPlainText)
+```
+
+```bash
+# bash/zsh — -s hides the typing, and the leading space keeps the read itself
+# out of history where HISTCONTROL=ignorespace is set
+ read -rs -p "BambooHR API key: " BAMBOO_API_KEY && export BAMBOO_API_KEY
+```
+
+Clear it when you are done: `$env:BAMBOO_API_KEY = $null`, or `unset
+BAMBOO_API_KEY`. The desktop app never has this problem — it stores the key in
+the OS credential store and no shell is involved.
+
+**PowerShell** (note: `VAR=value cmd` is bash-only and fails here):
+
+```powershell
+pnpm install
+
+$env:BAMBOO_API_KEY = "your-key"
+pnpm probe --subdomain your-company
+
+# Optionally capture the result (credentials are stripped before writing):
+pnpm probe --subdomain your-company --json probe-report.json
+
+# $env: persists for the whole session; clear it when you are done:
+Remove-Item Env:\BAMBOO_API_KEY
+```
+
+**Bash / zsh / Git Bash:**
+
 ```bash
 pnpm install
 
-# The key goes in the environment so it never lands in shell history.
 BAMBOO_API_KEY=your-key pnpm probe --subdomain your-company
 
 # Optionally capture the result (credentials are stripped before writing):
 BAMBOO_API_KEY=your-key pnpm probe --subdomain your-company --json probe-report.json
 ```
 
+If you omit the environment variable entirely, the probe prompts for the key
+instead, which sidesteps the shell difference. Note that the prompt echoes what
+you type, so prefer the environment variable if anyone can see your screen.
+
 The probe writes nothing to BambooHR and downloads no files. Every check is reported
 independently, so one refusal does not hide the rest.
 
 ### Findings
 
-> Record the answers here after running against a real account. The app degrades based
-> on these, but knowing them up front makes the degradation paths easier to test.
+Probed against the **avfrd** company on 2026-08-21:
 
-| Question | Non-admin key | Admin key |
-|---|---|---|
-| Endpoint form | _unrecorded_ | _unrecorded_ |
-| `/training/type` readable | _unrecorded_ | _unrecorded_ |
-| Populated sources | _unrecorded_ | _unrecorded_ |
+| Question | Answer |
+|---|---|
+| Endpoint form | **modern** — `https://avfrd.bamboohr.com/api/v1` answered; the legacy gateway fallback was not needed |
+| `/training/type` readable | **yes** — 885 training types returned, so records get real certification names |
+| Populated sources | Training records **166**, certifications table **1**, employee files **78** |
+
+What this means for this account:
+
+- **Naming works properly.** The feared 403 on `/training/type` did not occur, so the
+  join from `record.type` to a real certification name succeeds and the placeholder
+  fallback (`Training {typeId}`) should rarely appear.
+- **Training records, not the certifications table, are the real source here** — 166
+  records against a single certification row.
+- **Most records will have no file.** 166 records and 78 files means at least 88
+  records can have no certificate attached, which is exactly why record-only entries
+  still reach the summary and the manifest.
+
+Not yet established: whether the key used was admin or non-admin. BambooHR permissions
+the API as the underlying user, so a non-admin key may still be refused on
+`/training/type` — the degradation path remains untested against a real refusal even
+though the code path is unit-tested.
 
 ## How a certification gets its name
 
@@ -91,20 +148,77 @@ document category, and upload-date proximity — and it is treated as one: the a
 proposes pairings and requires you to confirm them before writing anything. Confirmed
 pairings are remembered, so corrections are made once.
 
+## Run the desktop app
+
+These commands are identical in PowerShell and bash:
+
+```bash
+pnpm install
+pnpm --filter @bamboo-ep/core build   # the app imports core's build output
+pnpm --filter @bamboo-ep/desktop tauri dev
+```
+
+### Build prerequisites
+
+- **All platforms:** the Rust toolchain.
+- **Linux:** the `keyring` crate's Secret Service backend needs dbus development
+  headers (`libdbus-1-dev` on Debian/Ubuntu) plus the usual Tauri WebKitGTK
+  dependencies. Only Windows has been compiled so far — see *Not yet verified*.
+
+The app walks through four steps — connect, check
+access, review matches, save — and writes nothing until you have reviewed the
+proposed file-to-record pairings.
+
+Output folder contents:
+
+| File | Purpose |
+|---|---|
+| `<Certification>.pdf` etc. | One file per certificate, named from your template. |
+| `Training Summary.pdf` | Printable list of every record, including those with no file. |
+| `Training Summary.csv` | The same list as a spreadsheet. |
+| `manifest.json` | Machine-readable record of everything. **Part 2 reads this.** |
+
+Your API key is stored in the operating system's credential manager (Windows
+Credential Manager, macOS Keychain, Linux Secret Service) — never in a config
+file. Stronghold was considered and rejected: its vault password would mean
+asking every employee to invent a second secret in order to store the first.
+
 ## Development
 
 ```bash
 pnpm install
-pnpm test        # 67 unit tests
+pnpm test        # 167 unit tests in packages/core
 pnpm typecheck
 ```
+
+There are 9 further tests on the Rust side (`cd apps/desktop/src-tauri && cargo
+test`), covering the filename guard and the AI client's destination rule.
 
 Tests cover the parts with rules worth pinning down: Windows filename sanitisation
 (reserved device names, trailing dots, case-insensitive collisions), template
 rendering, BambooHR's object-map-vs-empty-array response inconsistency, month
-arithmetic for derived expiry, the match scorer, and retry behaviour.
+arithmetic for derived expiry, the match scorer, retry behaviour, fuzzy person-name
+matching, and the tolerance of whatever shape a model returns its answer in.
 
 One retry rule is worth calling out because it is inverted from most APIs:
 
 - **503 means throttling** — retry, honouring `Retry-After`.
 - **429 means the account's employee-seat limit** — retrying can never help.
+
+## Not yet verified
+
+Everything below compiles and passes tests, but **no request has yet been made
+against a real BambooHR account**. In rough order of what to do first:
+
+1. ~~Run the probe with a real key.~~ **Done** — see Findings above. All three
+   questions answered against the `avfrd` account.
+2. **Click through `pnpm tauri dev`.** The keychain commands, the plugin-http
+   host allowlist, and the dialog/filesystem plugins have compiled but never
+   executed. The capability allowlist in particular can only fail at runtime —
+   if the legacy-gateway fallback works in the probe CLI but not in the app,
+   that scope is the first place to look.
+3. **A full pull against a real account** — confirm downloaded files open, that
+   filenames match the template, and that the record count matches what the
+   BambooHR web UI shows.
+4. **Packaging.** Only a Windows debug binary has been built. Signed installers
+   for Windows and macOS, notarisation, and a Linux build are all untouched.

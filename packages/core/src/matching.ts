@@ -1,3 +1,4 @@
+import { hasStableIdentity } from "./items.js";
 import { stemOf } from "./naming.js";
 import type { EmployeeFile, TrainingItem } from "./types.js";
 
@@ -78,7 +79,13 @@ export function buildMatchPlan(
 
   // User-confirmed pairs win outright and are never re-scored.
   for (const [fileId, itemKey] of Object.entries(confirmed)) {
-    if (!itemsByKey.has(itemKey)) continue;
+    const confirmedItem = itemsByKey.get(itemKey);
+    if (!confirmedItem) continue;
+    // A key built from a row's POSITION cannot carry a decision between runs:
+    // it would still match after the rows moved, and match the wrong record.
+    // Rescoring such a row is the safe answer - the user may have to repeat a
+    // correction, which is much cheaper than silently inheriting a wrong one.
+    if (!hasStableIdentity(confirmedItem)) continue;
     if (!files.some((f) => f.id === fileId)) continue;
     matches.push({
       itemKey,
@@ -128,7 +135,17 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
   if (overlap.ratio > 0) {
     // Name similarity is the strongest available signal, so it dominates.
     score += overlap.ratio * 0.7;
-    reasons.push(`File name shares "${overlap.shared.slice(0, 3).join('", "')}"`);
+    // The MISSING words are named too. A score of "medium" with only the
+    // matching words listed is unexplainable from the screen - the reviewer
+    // cannot tell whether the shortfall is one stray word or half the name,
+    // and during a live run that sent them to the document check for an
+    // answer the file-name row should have given them itself.
+    reasons.push(
+      overlap.missing.length === 0
+        ? `File name has every word of "${item.name}"`
+        : `File name shares "${overlap.shared.slice(0, 3).join('", "')}" ` +
+            `but not "${overlap.missing.slice(0, 3).join('", "')}"`,
+    );
   }
 
   for (const hint of CATEGORY_HINTS) {
@@ -140,13 +157,50 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
     }
   }
 
+  const numbers = compareNumbers(item.name, [file.name, file.originalFileName ?? ""]);
+  if (numbers.verdict === "agree") {
+    score += 0.15;
+    reasons.push(`Numbers agree (${numbers.shared.slice(0, 2).join(", ")})`);
+  }
+
   const proximity = dateProximity(item.completed, file.dateCreated);
   if (proximity != null) {
     score += proximity.weight;
     if (proximity.weight > 0) reasons.push(proximity.reason);
   }
 
-  const clamped = Math.max(0, Math.min(1, score));
+  // A conflicting level or standard number is disqualifying, not merely
+  // expensive. A penalty can always be outpaid by enough shared words - six
+  // matching tokens plus one wrong module number still scored above the
+  // proposal threshold - and "Module 1" against a Module 2 certificate is
+  // precisely the mislabel this scoring exists to prevent. Leaving the record
+  // unmatched for the user to assign by hand is the better failure.
+  if (numbers.verdict === "conflict") {
+    return {
+      itemKey: item.key,
+      fileId: file.id,
+      score: 0,
+      confidence: "low",
+      confirmedByUser: false,
+      reasons: [
+        `Numbers disagree (${numbers.certOnly.slice(0, 2).join(", ")} vs ` +
+          `${numbers.fileOnly.slice(0, 2).join(", ")})`,
+        ...reasons,
+      ],
+    };
+  }
+
+  // A filename containing EVERY word of the certification's name is the
+  // strongest evidence this scorer can see, and it must not be talked out of
+  // that by a weak corroborating signal. Name agreement alone scores exactly
+  // 0.7 - the high-confidence threshold - so the "uploaded years apart"
+  // penalty was enough to demote it. Certificates are routinely uploaded in
+  // one batch long after they were earned, so that penalty fired on an entire
+  // real export and reported every perfectly-named file as merely medium.
+  // A number conflict has already returned above, so reaching here means the
+  // numbers did not contradict.
+  const perfectName = overlap.ratio === 1;
+  const clamped = Math.max(perfectName ? 0.7 : 0, Math.min(1, score));
   return {
     itemKey: item.key,
     fileId: file.id,
@@ -165,14 +219,26 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
 export function tokenOverlap(
   certName: string,
   fileName: string,
-): { ratio: number; shared: string[] } {
+): { ratio: number; shared: string[]; missing: string[] } {
   const certTokens = tokenize(certName);
-  if (certTokens.size === 0) return { ratio: 0, shared: [] };
+  if (certTokens.size === 0) return { ratio: 0, shared: [], missing: [] };
   const fileTokens = tokenize(fileName);
 
   const shared = [...certTokens].filter((t) => fileTokens.has(t));
-  return { ratio: shared.length / certTokens.size, shared };
+  const missing = [...certTokens].filter((t) => !fileTokens.has(t));
+  return { ratio: shared.length / certTokens.size, shared, missing };
 }
+
+/**
+ * Roman numerals appear constantly in certification levels ("Firefighter II",
+ * "Fire Officer IV") while the uploaded file spells the same level with a
+ * digit. Normalising both to digits lets them match, and - more importantly -
+ * lets a genuine MISmatch be detected.
+ */
+const ROMAN_NUMERALS: Readonly<Record<string, string>> = {
+  i: "1", ii: "2", iii: "3", iv: "4", v: "5",
+  vi: "6", vii: "7", viii: "8", ix: "9", x: "10",
+};
 
 export function tokenize(input: string): Set<string> {
   const stem = stemOf(input) ?? input;
@@ -180,8 +246,93 @@ export function tokenize(input: string): Set<string> {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(" ")
-    .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
+    .filter((t) => t !== "")
+    .map((t) => ROMAN_NUMERALS[t] ?? t)
+    // Single characters carry no signal EXCEPT digits, which are often the
+    // only thing distinguishing "Module 1" from "Module 2". Dropping them
+    // made those two score identically and get assigned arbitrarily.
+    .filter((t) => (t.length > 1 || /^[0-9]$/.test(t)) && !STOP_WORDS.has(t));
   return new Set(tokens);
+}
+
+export type NumberVerdict = "agree" | "conflict" | "silent";
+
+export interface NumberComparison {
+  verdict: NumberVerdict;
+  /** Numbers both sides carry. */
+  shared: string[];
+  /** Numbers only the certification names. */
+  certOnly: string[];
+  /** Numbers only the document names. */
+  fileOnly: string[];
+}
+
+/**
+ * Compare the identifying numbers on a certification against a document.
+ *
+ * A conflict requires disagreement in BOTH directions: each side must carry a
+ * number the other lacks. Requiring only that the certification's numbers all
+ * appear would be too eager - "NFPA 1001 Firefighter I" against a file called
+ * `Firefighter-1.pdf` is the same certification, with the standard number
+ * simply left off the filename, and rejecting it would break far more pairings
+ * than it saved.
+ *
+ * Sharing ONE number is not agreement either, which is the subtler half.
+ * "Firefighter II (NFPA 1001)" and "Firefighter III (NFPA 1001)" share 1001,
+ * and treating that as agreement let a shared standard number mask a
+ * conflicting level - the exact mislabel the number check exists to catch.
+ *
+ * Exported and used by the AI verification path too. The two had independently
+ * grown the same partial-intersection bug; sharing the function is what stops
+ * them diverging again.
+ */
+export function compareNumbers(
+  certName: string,
+  /**
+   * Kept as separate strings rather than one joined blob: the browser's
+   * " (1)" duplicate-download suffix is stripped only at the END of a name,
+   * and concatenating would bury it mid-string where the strip cannot see it.
+   */
+  documentNames: readonly string[],
+): NumberComparison {
+  const cert = numericTokens(certName);
+  const document = new Set(documentNames.flatMap((part) => [...numericTokens(part)]));
+
+  const shared = [...cert].filter((n) => document.has(n));
+  const certOnly = [...cert].filter((n) => !document.has(n));
+  const fileOnly = [...document].filter((n) => !cert.has(n));
+
+  if (cert.size === 0 || document.size === 0) {
+    return { verdict: "silent", shared, certOnly, fileOnly };
+  }
+  if (certOnly.length > 0 && fileOnly.length > 0) {
+    return { verdict: "conflict", shared, certOnly, fileOnly };
+  }
+  return {
+    verdict: shared.length > 0 ? "agree" : "silent",
+    shared,
+    certOnly,
+    fileOnly,
+  };
+}
+
+/**
+ * The numeric tokens that identify a certification: levels, module numbers,
+ * and standard numbers such as NFPA 1001.
+ *
+ * Years are excluded because they date the document rather than identify the
+ * certification, and a browser's " (1)" duplicate-download suffix is stripped
+ * for the same reason - both produced false conflicts against real files.
+ */
+export function numericTokens(input: string): Set<string> {
+  const cleaned = input.replace(/\s\(\d+\)(?=\.[a-z0-9]+$|$)/i, "");
+  return new Set(
+    [...tokenize(cleaned)].filter((t) => /^[0-9]+$/.test(t) && !isYear(t)),
+  );
+}
+
+function isYear(token: string): boolean {
+  return /^(19|20)\d{2}$/.test(token);
 }
 
 /**

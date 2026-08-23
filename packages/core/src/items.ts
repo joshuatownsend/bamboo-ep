@@ -23,6 +23,36 @@ export interface BuildItemsInput {
   certifications: WireCertificationRow[];
 }
 
+/**
+ * The stand-in id for a certifications row that carries none of its own.
+ *
+ * `WireCertificationRow.id` is optional, and a row without one can only be
+ * identified by where it sat in the response. That is a position, not an
+ * identity: insert a row above it and the same key now names a different
+ * certification.
+ */
+const POSITIONAL_ID_PREFIX = "row-";
+
+function positionalId(index: number): string {
+  return `${POSITIONAL_ID_PREFIX}${index}`;
+}
+
+/**
+ * Can this item's key be relied on across separate runs?
+ *
+ * Only stable keys may be remembered as user-confirmed pairings. A positional
+ * key looks exactly like a real one, and a confirmed pairing bypasses scoring
+ * entirely - so a reordered response would hand a saved certificate to
+ * whichever certification had drifted into that slot, at full confidence and
+ * with no signal that anything had changed. That is precisely the silent
+ * relabelling this whole app exists to prevent.
+ */
+export function hasStableIdentity(item: TrainingItem): boolean {
+  return !(
+    item.source === "certifications" && item.id.startsWith(POSITIONAL_ID_PREFIX)
+  );
+}
+
 export function buildTrainingItems(input: BuildItemsInput): TrainingItem[] {
   return [
     ...input.certifications.map((row, index) => fromCertification(row, index)),
@@ -35,7 +65,7 @@ export function buildTrainingItems(input: BuildItemsInput): TrainingItem[] {
  * real title and a real expiration date, with no lookup required.
  */
 function fromCertification(row: WireCertificationRow, index: number): TrainingItem {
-  const id = idToString(row.id) ?? `row-${index}`;
+  const id = idToString(row.id) ?? positionalId(index);
   const title = cleanString(row.title);
   return {
     key: `certifications:${id}`,

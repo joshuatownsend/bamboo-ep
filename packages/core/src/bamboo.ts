@@ -9,6 +9,8 @@ import {
 import type {
   BambooCollection,
   EmployeeFile,
+  EmployeeIdentity,
+  WireSelfEmployee,
   WireCertificationRow,
   WireEmployeeFile,
   WireFileCategory,
@@ -35,15 +37,53 @@ export class BambooClient {
    * once here and use it everywhere else.
    */
   async getSelfEmployeeId(): Promise<string> {
-    const res = await this.http.getJson<{ id?: string | number }>("/employees/0");
-    const id = idToString(res?.id);
-    if (!id) {
+    return (await this.getSelf()).employeeId;
+  }
+
+  /**
+   * The same self lookup, asking for the caller's name as well as their id.
+   *
+   * The name is what makes "is this certificate even this person's?" an
+   * answerable question - a file named after the right certification can still
+   * belong to a colleague, and no amount of filename scoring can tell.
+   *
+   * The `fields` parameter is dropped and the call repeated bare if it is
+   * rejected. This lookup gates every other request in the app, so a tenant
+   * that dislikes the parameter must still be able to connect and download;
+   * only the person check is lost.
+   */
+  async getSelf(): Promise<{ employeeId: string; identity: EmployeeIdentity | null }> {
+    let res: WireSelfEmployee | null = null;
+    let identityAsked = true;
+    try {
+      res = await this.http.getJson<WireSelfEmployee>("/employees/0", {
+        query: { fields: "firstName,lastName,displayName,preferredName" },
+      });
+    } catch (err) {
+      if (!(err instanceof BambooApiError)) throw err;
+      identityAsked = false;
+      res = await this.http.getJson<WireSelfEmployee>("/employees/0");
+    }
+
+    const employeeId = idToString(res?.id);
+    if (!employeeId) {
       throw new Error(
         "BambooHR did not return an employee id for the authenticated user. " +
           "The API key may not be linked to an employee record.",
       );
     }
-    return id;
+
+    const identity: EmployeeIdentity = {
+      firstName: cleanString(res?.firstName),
+      lastName: cleanString(res?.lastName),
+      displayName: cleanString(res?.displayName),
+      preferredName: cleanString(res?.preferredName),
+    };
+    const hasAnyName = Object.values(identity).some((v) => v != null);
+    return {
+      employeeId,
+      identity: identityAsked && hasAnyName ? identity : null,
+    };
   }
 
   /** `GET /training/record/employee/{id}`. 404 means "no records". */

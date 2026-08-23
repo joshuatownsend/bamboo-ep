@@ -36,6 +36,37 @@ export interface Connection {
   style: BaseUrlStyle;
   /** Real numeric employee id, resolved from `GET /employees/0`. */
   employeeId: string;
+  /**
+   * Who the authenticated user is, as BambooHR spells it. Null when the
+   * account returned no name fields - which must stay survivable, since a
+   * name is a nice-to-have for verification and not required to download.
+   */
+  employee: EmployeeIdentity | null;
+}
+
+/**
+ * The employee's own name, needed to answer "is this certificate even this
+ * person's?" - the one question no filename heuristic can address, because a
+ * file named after the right certification can still belong to a colleague.
+ *
+ * Every field is optional on the wire. `displayName` is usually the most
+ * complete, but tenants configure it differently, so all four are kept and
+ * the comparison is made against the set rather than one chosen field.
+ */
+export interface EmployeeIdentity {
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string | null;
+  preferredName: string | null;
+}
+
+/** `GET /employees/0?fields=...` - every field but `id` may be absent. */
+export interface WireSelfEmployee {
+  id?: WireId;
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null;
+  preferredName?: string | null;
 }
 
 // --- Training ------------------------------------------------------------------

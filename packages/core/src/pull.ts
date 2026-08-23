@@ -13,6 +13,8 @@ import type { Manifest, ManifestEntry, OrphanFile } from "./manifest.js";
 import { DEFAULT_TEMPLATE, FilenameAllocator, buildFilename, stemOf } from "./naming.js";
 import { buildSummaryCsv, SUMMARY_CSV_FILENAME } from "./summary.js";
 import type { Connection, EmployeeFile, TrainingItem } from "./types.js";
+import { isTroubling } from "./verify.js";
+import type { Verification } from "./verify.js";
 
 /**
  * The two-phase pull.
@@ -81,6 +83,15 @@ export interface PullDecisions {
   excludedItemKeys?: readonly string[];
   /** Also save files that matched no record, under their own names. */
   includeOrphanFiles?: boolean;
+  /**
+   * Document checks the user ran during review, keyed by item key.
+   *
+   * A verification is about a PAIR, so each one names the file it examined and
+   * is discarded if the row now points somewhere else. Without that, verifying
+   * a row and then repointing it would ship a verdict about a document nobody
+   * looked at.
+   */
+  verifications?: Readonly<Record<string, Verification>>;
 }
 
 export interface PullOptions {
@@ -89,6 +100,13 @@ export interface PullOptions {
   workspace: Workspace;
   decisions: PullDecisions;
   filenameTemplate?: string;
+  /**
+   * Extra names the caller will write into the same folder afterwards. They
+   * are claimed up front so a certificate can never be allocated a name that
+   * is later overwritten - the printable summary is written by the UI layer,
+   * so core cannot know its filename without being told.
+   */
+  reservedFilenames?: readonly string[];
   appVersion: string;
   /** Injected so `core` never imports a filesystem. */
   writeFile: (filename: string, bytes: Uint8Array) => Promise<void>;
@@ -133,17 +151,42 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     workspace.plan.matches.map((m: Match) => [`${m.fileId}:${m.itemKey}`, m]),
   );
 
+  // Confirmations are keyed by file id, but they are WALKED in record order.
+  // Filenames are allocated in this order, and two records can render the same
+  // name, so whoever is walked first takes the unsuffixed one. Object key order
+  // for numeric-looking keys is numeric, which has nothing to do with the order
+  // the review screen displays - so the row promised "CPR.pdf" could quietly be
+  // handed "CPR (2).pdf" while another record took the plain name.
+  const fileIdByItemKey = new Map(
+    Object.entries(decisions.confirmed).map(([fileId, itemKey]) => [itemKey, fileId]),
+  );
+
   const pairs: Array<{ item: TrainingItem; file: EmployeeFile; matched: Match | undefined }> = [];
-  for (const [fileId, itemKey] of Object.entries(decisions.confirmed)) {
-    const item = itemsByKey.get(itemKey);
+  for (const item of workspace.items) {
+    const fileId = fileIdByItemKey.get(item.key);
+    if (fileId === undefined || excluded.has(item.key)) continue;
     const file = filesById.get(fileId);
-    if (!item || !file || excluded.has(itemKey)) continue;
-    pairs.push({ item, file, matched: scoreByPair.get(`${fileId}:${itemKey}`) });
+    if (!file) continue;
+    pairs.push({ item, file, matched: scoreByPair.get(`${fileId}:${item.key}`) });
   }
 
   const pairedFileIds = new Set(pairs.map((p) => p.file.id));
 
-  const allocator = new FilenameAllocator([MANIFEST_FILENAME, SUMMARY_CSV_FILENAME]);
+  /**
+   * A verdict is only carried into the manifest if the row still points at the
+   * file that was examined. Repointing a row after verifying it must lose the
+   * verdict, not relabel it.
+   */
+  const verificationFor = (itemKey: string, fileId: string): Verification | null => {
+    const found = decisions.verifications?.[itemKey];
+    return found && found.bambooFileId === fileId ? found : null;
+  };
+
+  const allocator = new FilenameAllocator([
+    MANIFEST_FILENAME,
+    SUMMARY_CSV_FILENAME,
+    ...(options.reservedFilenames ?? []),
+  ]);
   const failures: PullResult["failures"] = [];
   const filesWritten: string[] = [];
   const entriesByKey = new Map<string, ManifestEntry>();
@@ -199,7 +242,7 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
       const res = await download(job.file.id, job.filename, job.item.name);
       filesWritten.push(job.filename);
       entriesByKey.set(job.item.key, {
-        ...toEntry(job.item),
+        ...toEntry(job.item, verificationFor(job.item.key, job.file.id)),
         file: {
           bambooFileId: job.file.id,
           savedAs: job.filename,
@@ -222,7 +265,9 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
         label: job.item.name,
         message: err instanceof Error ? err.message : String(err),
       });
-      // A failed download still leaves a record worth reporting.
+      // A failed download still leaves a record worth reporting. The check is
+      // dropped with it: a verdict about a file that is not in the folder
+      // would be a claim Part 2 could not act on.
       entriesByKey.set(job.item.key, toEntry(job.item));
     }
   });
@@ -269,7 +314,25 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     .map((i) => entriesByKey.get(i.key))
     .filter((e): e is ManifestEntry => e != null);
 
-  const warnings = [...workspace.warnings, ...failures.map((f) => `${f.label}: ${f.message}`)];
+  // A contradicted check is raised as a warning rather than blocking the
+  // pull. The decision on this was explicit: a document check is evidence, not
+  // an authority, and a check that can stop an export would be switched off
+  // the first time it was wrong. The record still has to reach the manifest -
+  // it is the reviewer, not this app, who decides what to do about it.
+  const verificationWarnings = entries
+    .filter((e) => e.verification != null && isTroubling(e.verification))
+    .map((e) => describeContradiction(e, itemsByKey));
+
+  const warnings = [
+    ...workspace.warnings,
+    ...failures.map((f) => `${f.label}: ${f.message}`),
+    ...verificationWarnings,
+  ];
+
+  // The summaries are part of what this export produced, so they belong in
+  // `outputs` alongside the certificates. The manifest names itself too: a
+  // later run must be able to recognise it as ours.
+  const outputs = [...filesWritten, SUMMARY_CSV_FILENAME, MANIFEST_FILENAME];
 
   const manifest = buildManifest({
     appVersion,
@@ -281,6 +344,7 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     entries,
     orphanFiles: orphanRecords,
     orphanFileCount: workspace.files.filter((f) => !pairedFileIds.has(f.id)).length,
+    outputs,
     warnings,
   });
 
@@ -290,7 +354,10 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
   return { manifest, filesWritten, failures };
 }
 
-function toEntry(item: TrainingItem): ManifestEntry {
+function toEntry(
+  item: TrainingItem,
+  verification: Verification | null = null,
+): ManifestEntry {
   return {
     key: item.key,
     recordId: item.id,
@@ -305,6 +372,7 @@ function toEntry(item: TrainingItem): ManifestEntry {
     certificationNumber: item.certificationNumber,
     notes: item.notes,
     file: null,
+    verification,
   };
 }
 
@@ -335,4 +403,39 @@ export async function runPool<T>(
 
 function encodeUtf8(text: string): Uint8Array {
   return new TextEncoder().encode(text);
+}
+
+/**
+ * Plain language, naming the record the document appears to belong to when
+ * there is one. "Fire Officer 2 may be Fire Officer 3's certificate" is
+ * actionable; "verification failed" is not.
+ */
+function describeContradiction(
+  entry: ManifestEntry,
+  itemsByKey: ReadonlyMap<string, TrainingItem>,
+): string {
+  const check = entry.verification;
+  if (!check) return "";
+
+  const problems: string[] = [];
+  if (check.verdicts.person === "contradicts") {
+    problems.push(
+      `it appears to be issued to ${check.extracted?.personName ?? "someone else"}`,
+    );
+  }
+  if (check.verdicts.name === "contradicts") {
+    const suggestion = check.suggestedItemKey
+      ? itemsByKey.get(check.suggestedItemKey)?.name
+      : null;
+    problems.push(
+      suggestion
+        ? `the page reads "${check.extracted?.certificationName ?? "?"}", which matches ${suggestion}`
+        : `the page reads "${check.extracted?.certificationName ?? "?"}"`,
+    );
+  }
+  if (check.verdicts.date === "contradicts") {
+    problems.push(`the date on the page is ${check.extracted?.issuedDate ?? "different"}`);
+  }
+
+  return `${entry.name}: the saved certificate was checked and ${problems.join("; ")}.`;
 }

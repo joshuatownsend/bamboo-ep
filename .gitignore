@@ -6,3 +6,10 @@ target/
 .env.local
 out/
 .probe-output.json
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+packages/core/.scratch/
+
+# CodeGraph index - machine-generated, rebuilt with `codegraph init`
+.codegraph/

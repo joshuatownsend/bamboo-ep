@@ -12,6 +12,12 @@ const connection: Connection = {
   baseUrl: "https://acme.bamboohr.com/api/v1",
   style: "modern",
   employeeId: "123",
+  employee: {
+    firstName: "Joshua",
+    lastName: "Townsend",
+    displayName: "Joshua Townsend",
+    preferredName: null,
+  },
 };
 
 function item(partial: Partial<TrainingItem> & { key: string; name: string }): TrainingItem {
@@ -240,6 +246,25 @@ describe("executePull", () => {
     expect(readManifest(fs).entries[0]?.file?.matchedBy).toBe("user");
   });
 
+  it("never allocates a name the caller reserved for its own output", async () => {
+    // A certification literally named "Training Summary" would otherwise be
+    // written as Training Summary.pdf and then clobbered by the summary sheet.
+    const items = [item({ key: "training:1", name: "Training Summary" })];
+    const files = [file({ id: "100", name: "Training Summary" })];
+    const fs = memoryFs();
+
+    const result = await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      reservedFilenames: ["Training Summary.pdf"],
+      writeFile: fs.writeFile,
+    });
+
+    expect(result.filesWritten).toEqual(["Training Summary (2).pdf"]);
+  });
+
   it("excludes items the user deselected", async () => {
     const items = [
       item({ key: "training:1", name: "CPR BLS" }),
@@ -344,5 +369,227 @@ describe("runPool", () => {
 
   it("handles an empty list without hanging", async () => {
     await expect(runPool([], 4, async () => {})).resolves.toBeUndefined();
+  });
+});
+
+describe("executePull: what the export produced", () => {
+  // Ownership of a file is recorded, never inferred. A later run consults this
+  // to decide what it may replace, and guessing in that direction destroys the
+  // user's own files - so the record has to name exactly what was written.
+  it("records every file it wrote, including the summary and itself", async () => {
+    const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+    const files = [file({ id: "100", name: "cpr" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.outputs).toContain("CPR BLS - 2025-06-01.pdf");
+    expect(manifest.outputs).toContain(SUMMARY_CSV_FILENAME);
+    expect(manifest.outputs).toContain(MANIFEST_FILENAME);
+  });
+
+  it("does not claim a certificate whose download failed", async () => {
+    const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+    const files = [file({ id: "100", name: "cpr" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient({ failIds: ["100"] }),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      writeFile: fs.writeFile,
+    });
+
+    expect(readManifest(fs).outputs).not.toContain("CPR BLS - 2025-06-01.pdf");
+  });
+});
+
+describe("executePull: filename collisions", () => {
+  // The review screen allocates in record order. Confirmations are keyed by
+  // file id, and walking THOSE gave numeric-key order - so the row promised
+  // the plain name could be handed the suffixed one, and vice versa. The two
+  // must agree, because the preview is a promise about what gets written.
+  it("allocates collision suffixes in record order, not file-id order", async () => {
+    const items = [
+      item({ key: "training:1", name: "CPR", completed: "2025-06-01" }),
+      item({ key: "training:2", name: "CPR", completed: "2025-06-01" }),
+    ];
+    // Deliberately reversed: the first record's file sorts second by id.
+    const files = [file({ id: "900", name: "a" }), file({ id: "100", name: "b" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "900": "training:1", "100": "training:2" } },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    const savedAs = (key: string) =>
+      manifest.entries.find((e) => e.key === key)?.file?.savedAs;
+
+    expect(savedAs("training:1")).toBe("CPR - 2025-06-01.pdf");
+    expect(savedAs("training:2")).toBe("CPR - 2025-06-01 (2).pdf");
+  });
+});
+
+describe("executePull: document checks in the manifest", () => {
+  const verification = (bambooFileId: string, name: "confirms" | "contradicts") => ({
+    provider: "anthropic",
+    model: "claude-opus-5",
+    verifiedAt: "2026-01-15T00:00:00.000Z",
+    bambooFileId,
+    extracted: {
+      certificationName: "CPR BLS",
+      issuedDate: "2025-06-01",
+      expirationDate: null,
+      personName: "Joshua Townsend",
+      documentType: "certificate" as const,
+      legible: true,
+    },
+    verdicts: { name, date: "confirms" as const, person: "confirms" as const },
+    suggestedItemKey: null,
+    error: null,
+  });
+
+  const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+  const files = [file({ id: "100", name: "cpr" }), file({ id: "200", name: "other" })];
+
+  it("records the check alongside the file it examined", async () => {
+    const fs = memoryFs();
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": verification("100", "confirms") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.manifestVersion).toBe(2);
+    expect(manifest.entries[0]?.verification?.bambooFileId).toBe("100");
+    expect(manifest.summary.verified).toBe(1);
+    expect(manifest.summary.contradicted).toBe(0);
+  });
+
+  // The pairing is what was checked. Repointing the row afterwards makes the
+  // verdict a claim about a document nobody looked at.
+  it("drops a check whose row was repointed at a different file", async () => {
+    const fs = memoryFs();
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "200": "training:1" },
+        verifications: { "training:1": verification("100", "confirms") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    expect(readManifest(fs).entries[0]?.verification).toBeNull();
+  });
+
+  // A failed attempt is still recorded, but it is not a verified certificate.
+  // Counting it as one let a manifest report everything verified when every
+  // single request had failed - the worst possible signal for Part 2.
+  it("counts a failed attempt as attempted, not as verified", async () => {
+    const fs = memoryFs();
+    const failed = {
+      ...verification("100", "confirms"),
+      extracted: null,
+      error: "The AI provider returned 400: credit balance is too low",
+    };
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": failed },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.summary.verified).toBe(0);
+    expect(manifest.summary.verificationFailed).toBe(1);
+    // Still present, so "we asked and could not tell" survives into Part 2.
+    expect(manifest.entries[0]?.verification?.error).toMatch(/credit balance/);
+  });
+
+  // A well-formed answer saying the scan is unreadable carries no error, but
+  // nothing was learned from it. Counting it as verified would tell Part 2 a
+  // folder of illegible scans had all been checked and cleared.
+  it("does not count an illegible scan as verified", async () => {
+    const fs = memoryFs();
+    const unreadable = {
+      ...verification("100", "confirms"),
+      extracted: {
+        certificationName: null,
+        issuedDate: null,
+        expirationDate: null,
+        personName: null,
+        alsoMentioned: [],
+        documentType: "unreadable" as const,
+        legible: false,
+      },
+      verdicts: {
+        name: "inconclusive" as const,
+        date: "inconclusive" as const,
+        person: "inconclusive" as const,
+      },
+    };
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": unreadable },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.summary.verified).toBe(0);
+    // Still recorded: the attempt happened and its result is evidence.
+    expect(manifest.entries[0]?.verification).not.toBeNull();
+  });
+
+  // Decision: a contradicted check warns, it never blocks. The certificate is
+  // still downloaded and still reaches the manifest.
+  it("warns about a contradiction without withholding the file", async () => {
+    const fs = memoryFs();
+    const result = await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": verification("100", "contradicts") },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    expect(result.filesWritten).toHaveLength(1);
+    const manifest = readManifest(fs);
+    expect(manifest.summary.contradicted).toBe(1);
+    expect(manifest.warnings.join(" ")).toMatch(/CPR BLS: the saved certificate was checked/);
   });
 });
