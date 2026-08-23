@@ -338,8 +338,21 @@ export default function App() {
           // disagree with its own manifest and lock the next export out of it,
           // so the unclaimed file goes rather than the record being wrong.
           if (pdfWritten) {
-            await deleteExportFile(directory, SUMMARY_PDF_FILENAME).catch(() => undefined);
-            pdfWritten = false;
+            // Removing it is what keeps the folder agreeing with its own
+            // manifest. If that fails too, the folder is left in a state the
+            // NEXT export will refuse - a fixed output name held by a file no
+            // manifest claims - so the user is told plainly what to delete
+            // rather than meeting an unexplained refusal later.
+            try {
+              await deleteExportFile(directory, SUMMARY_PDF_FILENAME);
+              pdfWritten = false;
+            } catch (removalError) {
+              problems.push(
+                `"${SUMMARY_PDF_FILENAME}" was written but the manifest does not ` +
+                  `list it, and it could not be removed: ${messageOf(removalError)}. ` +
+                  "Delete that file before exporting to this folder again.",
+              );
+            }
           }
         }
 
@@ -510,7 +523,8 @@ export default function App() {
             identity={connection?.employee ?? null}
             reservedFilenames={exportPlan.reserved}
             onOutputDirChosen={async (directory) => {
-              if (connection) setExportPlan(await planExportInto(directory, connection));
+              if (!connection) return;
+              setExportPlan(await planExportInto(directory, connection));
             }}
           />
         )}

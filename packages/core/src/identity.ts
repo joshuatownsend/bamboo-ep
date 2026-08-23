@@ -106,12 +106,17 @@ export type PersonMatch = "same" | "different" | "unknown";
 /**
  * Compare a name printed on a document against the employee's own.
  *
- * The rule is: a shared SURNAME-strength word plus one more shared word means
- * the same person; any shared word at all with nothing contradicting is not
- * enough to convict but not enough to acquit either. Only a name that shares
- * nothing is called different - being wrong in that direction merely produces
- * a warning the user can dismiss, while being wrong the other way would let a
- * colleague's certificate through silently.
+ * Confirming requires the SURNAME plus at least one given name. Counting any
+ * two matching components was not a test of identity at all: "Mary Ann Smith"
+ * and "Mary Ann Jones" share two components and are different people, and a
+ * confirming verdict on that is a colleague's certificate cleared as the
+ * employee's own.
+ *
+ * Everything short of that is "unknown" rather than an accusation. Only a name
+ * sharing NOTHING is called different - a surname changes with marriage, a
+ * certificate may print given names alone, and being wrong in that direction
+ * costs a warning the user dismisses, while being wrong the other way lets the
+ * wrong person's document through silently.
  */
 export function comparePersonName(
   printed: string | null,
@@ -123,26 +128,30 @@ export function comparePersonName(
   const found = new Set(splitName(printed));
   if (found.size === 0) return "unknown";
 
-  // Counted in distinct name COMPONENTS, not in matched strings.
-  //
-  // BambooHR supplies the same name several ways - firstName "Joshua" and
-  // preferredName "Josh" - and those are one component wearing two spellings.
-  // Counting them separately let a certificate reading "Joshua Smith" match
-  // both and reach the threshold of two without the surname ever appearing,
-  // clearing a colleague's document as the employee's own.
-  const components = componentsOf(known);
-  const shared = components.filter((component) =>
-    [...found].some((word) => component.some((alias) => sameWord(word, alias))),
-  );
+  const matches = (word: string) => [...found].some((f) => sameWord(f, word));
+
+  // Compared in distinct name COMPONENTS, not in matched strings. BambooHR
+  // supplies the same name several ways - firstName "Joshua" and
+  // preferredName "Josh" - and those are one component in two spellings, which
+  // must not count as two pieces of evidence.
+  const surname = new Set(identity?.lastName ? splitName(identity.lastName) : []);
+  const shared = componentsOf(known).filter((component) => component.some(matches));
+
+  if (surname.size > 0) {
+    const surnameAgrees = [...surname].some(matches);
+    const givenNameAgrees = shared.some(
+      (component) => !component.some((alias) => surname.has(alias)),
+    );
+    if (surnameAgrees && givenNameAgrees) return "same";
+    // A shared given name with a conflicting surname is the "Mary Ann Jones"
+    // case; a shared surname alone is two colleagues named Townsend. Both are
+    // ambiguous, neither is proof of anyone.
+    return shared.length > 0 ? "unknown" : "different";
+  }
+
+  // No surname on file. Two agreeing components is the best test available,
+  // and it is weaker than the one above - which is itself a reason the probe
+  // screen reports when BambooHR returned no name.
   if (shared.length >= 2) return "same";
-
-  // A single shared word is genuinely ambiguous: two colleagues named Smith
-  // share a surname, and two named Joshua share a first name. Neither the
-  // accusation nor the clearance is safe on that evidence.
-  // An initial-only rendering ("J TOWNSEND") reduces to the surname alone,
-  // which lands here rather than below - correctly, since it is ambiguous and
-  // not evidence of anyone else.
-  if (shared.length === 1) return "unknown";
-
-  return "different";
+  return shared.length === 1 ? "unknown" : "different";
 }

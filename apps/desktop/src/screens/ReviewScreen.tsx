@@ -64,8 +64,13 @@ interface Props {
    * the collision suffix.
    */
   reservedFilenames: readonly string[];
-  /** Lets the reservations be recomputed when a new folder is picked. */
-  onOutputDirChosen: (directory: string) => void;
+  /**
+   * Recomputes the reservations for a newly picked folder. Awaited, and Save
+   * stays disabled until it resolves: the point of the preview is that the
+   * names shown are the names written, which is not true while the folder is
+   * still being read.
+   */
+  onOutputDirChosen: (directory: string) => Promise<void>;
 }
 
 export function ReviewScreen({
@@ -132,6 +137,7 @@ export function ReviewScreen({
   );
   const pagePreviews = usePreviews(renderFile);
   const [zoomed, setZoomed] = useState<{ fileId: string; label: string } | null>(null);
+  const [planningFolder, setPlanningFolder] = useState(false);
   const zoomedState = zoomed ? pagePreviews.stateOf(zoomed.fileId) : null;
 
   const [aiReady, setAiReady] = useState(false);
@@ -542,13 +548,15 @@ export function ReviewScreen({
             type="button"
             onClick={submit}
             className="primary"
-            disabled={busy || checks.busy}
+            disabled={busy || checks.busy || planningFolder}
           >
             {busy
               ? "Saving…"
-              : checks.busy
-                ? "Waiting for the certificate checks…"
-                : `Save ${selectedCount} record${selectedCount === 1 ? "" : "s"} (${withFileCount} with files)`}
+              : planningFolder
+                ? "Reading that folder…"
+                : checks.busy
+                  ? "Waiting for the certificate checks…"
+                  : `Save ${selectedCount} record${selectedCount === 1 ? "" : "s"} (${withFileCount} with files)`}
           </button>
         </div>
       </div>
@@ -598,7 +606,12 @@ export function ReviewScreen({
               const dir = await chooseOutputDirectory();
               if (!dir) return;
               onSettingsChange({ ...settings, outputDir: dir });
-              onOutputDirChosen(dir);
+              setPlanningFolder(true);
+              try {
+                await onOutputDirChosen(dir);
+              } finally {
+                setPlanningFolder(false);
+              }
             }}
           >
             {settings.outputDir ?? "Choose a folder…"}

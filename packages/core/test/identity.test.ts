@@ -98,6 +98,26 @@ describe("comparePersonName", () => {
     expect(comparePersonName("TOWNSEND JOSHUA RUSSELL", both)).toBe("same");
   });
 
+  // "Any two components" was never a test of identity: these two people share
+  // both given names and are plainly different, and a confirming verdict on
+  // that is a colleague's certificate cleared as the employee's own.
+  it("refuses to confirm when the surname conflicts", () => {
+    const mary = {
+      firstName: "Mary",
+      lastName: "Smith",
+      displayName: "Mary Ann Smith",
+      preferredName: null,
+    };
+    expect(comparePersonName("Mary Ann Jones", mary)).toBe("unknown");
+    expect(comparePersonName("Mary Ann Smith", mary)).toBe("same");
+  });
+
+  // A surname alone is two colleagues; a surname plus a given name is a person.
+  it("needs a given name as well as the surname", () => {
+    expect(comparePersonName("Townsend", me)).toBe("unknown");
+    expect(comparePersonName("Joshua Townsend", me)).toBe("same");
+  });
+
   it("keeps unrelated short names apart", () => {
     expect(comparePersonName("Mark Delgado", { ...me, firstName: "Maria" })).toBe(
       "different",
