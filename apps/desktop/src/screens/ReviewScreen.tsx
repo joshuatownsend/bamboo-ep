@@ -134,7 +134,7 @@ export function ReviewScreen({
   const [zoomed, setZoomed] = useState<{ fileId: string; label: string } | null>(null);
   const zoomedState = zoomed ? pagePreviews.stateOf(zoomed.fileId) : null;
 
-  const [aiKeyPresent, setAiKeyPresent] = useState(false);
+  const [aiReady, setAiReady] = useState(false);
   const checks = useVerification({
     settings: settings.ai,
     identity,
@@ -362,7 +362,7 @@ export function ReviewScreen({
               ? "All pages shown"
               : `Show all ${unrenderedCount} certificate page${unrenderedCount === 1 ? "" : "s"}`}
           </button>
-          {aiKeyPresent && (
+          {aiReady && (
             <button
               type="button"
               className="secondary"
@@ -380,7 +380,7 @@ export function ReviewScreen({
           {/* Only shown when there is something to retry. A permanently
               visible retry button would read as "the last run went badly"
               on every run that went fine. */}
-          {aiKeyPresent && retryablePairs.length > 0 && (
+          {aiReady && retryablePairs.length > 0 && (
             <button
               type="button"
               className="secondary"
@@ -503,7 +503,7 @@ export function ReviewScreen({
                       nameOf={(key) => itemsByKey.get(key)?.name}
                       onRetry={() => void checks.verify(item, assigned)}
                     />
-                    {assigned && !isExcluded && aiKeyPresent &&
+                    {assigned && !isExcluded && aiReady &&
                       checks.stateOf(item.key).status === "idle" && (
                         <button
                           type="button"
@@ -626,7 +626,7 @@ export function ReviewScreen({
         <AiSettingsPanel
           settings={settings.ai}
           onChange={(ai) => onSettingsChange({ ...settings, ai })}
-          onKeyPresenceChange={setAiKeyPresent}
+          onReadyChange={setAiReady}
         />
 
         <p className="aside-note">

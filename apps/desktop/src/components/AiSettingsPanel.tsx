@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AI_DEFAULTS, aiKeyStore } from "../platform";
+import { AI_DEFAULTS, aiKeyStore, aiNeedsKey } from "../platform";
 import type { AiProvider, AiSettings } from "../platform";
 
 /**
@@ -15,8 +15,11 @@ import type { AiProvider, AiSettings } from "../platform";
 interface Props {
   settings: AiSettings;
   onChange: (settings: AiSettings) => void;
-  /** Bubbled up so the row buttons can enable themselves. */
-  onKeyPresenceChange: (present: boolean) => void;
+  /**
+   * Whether checks can actually be run - a saved key, OR an endpoint that
+   * needs none. Bubbled up so the row buttons can enable themselves.
+   */
+  onReadyChange: (ready: boolean) => void;
 }
 
 const PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
@@ -24,7 +27,8 @@ const PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
   openai: "OpenAI-compatible",
 };
 
-export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Props) {
+export function AiSettingsPanel({ settings, onChange, onReadyChange }: Props) {
+  const needsKey = aiNeedsKey(settings);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [draftKey, setDraftKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -36,19 +40,19 @@ export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Pro
       .then((present) => {
         if (cancelled) return;
         setHasKey(present);
-        onKeyPresenceChange(present);
+        onReadyChange(present || !needsKey);
       })
       .catch(() => {
         // A credential store that will not answer is a real state, not a
-        // crash: the user simply cannot run checks on this machine.
+        // crash: the user can still run checks against a local model.
         if (cancelled) return;
         setHasKey(false);
-        onKeyPresenceChange(false);
+        onReadyChange(!needsKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [onKeyPresenceChange, settings.provider]);
+  }, [needsKey, onReadyChange, settings.provider]);
 
   const saveKey = async () => {
     const trimmed = draftKey.trim();
@@ -59,7 +63,7 @@ export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Pro
       // state object once it is in the keychain.
       setDraftKey("");
       setHasKey(true);
-      onKeyPresenceChange(true);
+      onReadyChange(true);
       setNote("Saved to this computer's credential store.");
     } catch (err) {
       setNote(err instanceof Error ? err.message : String(err));
@@ -69,7 +73,7 @@ export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Pro
   const forgetKey = async () => {
     await aiKeyStore.remove(settings.provider);
     setHasKey(false);
-    onKeyPresenceChange(false);
+    onReadyChange(!needsKey);
     setNote("Removed.");
   };
 
@@ -131,7 +135,16 @@ export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Pro
         </span>
       </label>
 
-      {hasKey ? (
+      {!needsKey && !hasKey ? (
+        <div className="field">
+          <span className="field-label">API key</span>
+          <p className="field-hint">
+            Not needed — that address is on this computer, and local model
+            servers accept requests without one. Certificates checked this way
+            never leave the machine.
+          </p>
+        </div>
+      ) : hasKey ? (
         <div className="field">
           <span className="field-label">API key</span>
           <p className="field-hint">Saved in this computer's credential store.</p>

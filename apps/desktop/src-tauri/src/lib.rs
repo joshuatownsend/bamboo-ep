@@ -125,6 +125,21 @@ fn read_export_file(directory: String, filename: String) -> Result<Option<String
     }
 }
 
+/// Remove one file from the export folder.
+///
+/// Used to clear away a previous export's outputs that the current one no
+/// longer produces. Absence is success: the end state is what matters.
+#[tauri::command]
+fn delete_export_file(directory: String, filename: String) -> Result<(), String> {
+    let name = safe_filename(&filename)?;
+    let path = std::path::PathBuf::from(&directory).join(name);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Could not remove \"{filename}\": {e}")),
+    }
+}
+
 /// Write one file into the export folder.
 ///
 /// `overwrite` is false for a folder this app has not written before, and the
@@ -230,6 +245,7 @@ pub fn run() {
             ensure_export_directory,
             list_export_directory,
             read_export_file,
+            delete_export_file,
             write_export_file,
             ai::save_ai_key,
             ai::has_ai_key,

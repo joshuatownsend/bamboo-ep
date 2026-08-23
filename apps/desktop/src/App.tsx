@@ -25,6 +25,7 @@ import {
   chooseOutputDirectory,
   credentialStore,
   directoryWriter,
+  deleteExportFile,
   ensureDirectory,
   listExportDirectory,
   loadSettings,
@@ -241,11 +242,37 @@ export default function App() {
           // executePull wrote manifest.json before this point, so the warning
           // would otherwise live only in memory - invisible to Part 2 and to
           // anyone reading the folder later.
+          //
+          // Deliberately NOT `write`: on a first export into an empty folder
+          // that writer is in create-new mode, so rewriting a file it just
+          // created is guaranteed to fail. Replacing our own manifest, seconds
+          // after writing it, is the one case where overwriting is
+          // unambiguously right.
           try {
-            await write(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
+            const replace = directoryWriter(directory, true);
+            await replace(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
           } catch {
             /* The manifest on disk is then simply the one without this note. */
           }
+        }
+
+        // Files the last export produced that this one did not. A changed
+        // filename template, an excluded record, or a file removed in BambooHR
+        // all leave certificates behind that appear in no manifest and no
+        // summary - and a stale certificate in an export folder is exactly the
+        // kind of thing someone downstream takes at face value.
+        //
+        // Only ever prior-manifest outputs: anything the user put there
+        // themselves was never ours to remove.
+        const produced = new Set<string>([
+          ...finalResult.filesWritten,
+          ...FIXED_OUTPUT_NAMES,
+        ]);
+        const superseded = plan.priorOutputs.filter((name) => !produced.has(name));
+        for (const name of superseded) {
+          // A folder left slightly untidy is a far smaller problem than a
+          // failed export, so this never sinks the run.
+          await deleteExportFile(directory, name).catch(() => undefined);
         }
 
         setResult(finalResult);
@@ -424,9 +451,14 @@ export interface ExportPlan {
   reserved: string[];
   /** Whether a generated name may replace a file already at that path. */
   overwrite: boolean;
+  /**
+   * Files the previous export produced and that are still on disk. Anything
+   * here the new export does not produce is superseded and can be cleared.
+   */
+  priorOutputs: string[];
 }
 
-const EMPTY_PLAN: ExportPlan = { reserved: [], overwrite: false };
+const EMPTY_PLAN: ExportPlan = { reserved: [], overwrite: false, priorOutputs: [] };
 
 /** Written under names the allocator cannot vary, so collisions are fatal. */
 const FIXED_OUTPUT_NAMES = [
@@ -458,12 +490,13 @@ async function planExportInto(
     : null;
 
   // Not ours: nothing here may be touched, so every name is claimed.
-  if (!prior) return { reserved: existing, overwrite: false };
+  if (!prior) return { reserved: existing, overwrite: false, priorOutputs: [] };
 
   const ours = outputsOf(prior);
   return {
     reserved: existing.filter((name) => !ours.has(name)),
     overwrite: true,
+    priorOutputs: existing.filter((name) => ours.has(name)),
   };
 }
 

@@ -67,13 +67,16 @@ pub fn delete_ai_key(provider: String) -> Result<(), String> {
     }
 }
 
-/// Where a certificate is allowed to be sent.
+/// Where a certificate is allowed to be sent, and whether that is off-machine.
 ///
 /// A plain-HTTP endpoint would put a scan of someone's identity documents on
 /// the wire in the clear, so it is refused - except on the loopback address,
 /// where it never reaches a network and is how every local model server
 /// (Ollama, LM Studio, llama.cpp) is actually addressed.
-fn check_destination(base_url: &str) -> Result<(), String> {
+///
+/// Returns whether the destination is loopback, which also decides whether an
+/// API key is required at all.
+fn check_destination(base_url: &str) -> Result<bool, String> {
     let url = reqwest::Url::parse(base_url)
         .map_err(|e| format!("\"{base_url}\" is not a valid address: {e}"))?;
 
@@ -81,8 +84,8 @@ fn check_destination(base_url: &str) -> Result<(), String> {
     let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
 
     match url.scheme() {
-        "https" => Ok(()),
-        "http" if is_loopback => Ok(()),
+        "https" => Ok(is_loopback),
+        "http" if is_loopback => Ok(true),
         "http" => Err(format!(
             "Refusing to send a certificate to {host} over plain HTTP. \
              Use an https:// address, or a local model on localhost."
@@ -106,16 +109,21 @@ pub async fn ai_extract(
     image_base64: String,
     image_mime: String,
 ) -> Result<String, String> {
-    check_destination(&base_url)?;
+    let is_local = check_destination(&base_url)?;
 
-    let api_key = ai_entry(&provider)?
-        .get_password()
-        .map_err(|e| match e {
-            keyring::Error::NoEntry => {
-                "No API key is saved for this AI provider yet.".to_string()
-            }
-            other => format!("Could not read the stored AI provider key: {other}"),
-        })?;
+    // A local model server takes no credentials, and demanding one would make
+    // the only configuration that sends nothing off this machine the one
+    // configuration that cannot be used without first inventing a fake secret.
+    let api_key = match ai_entry(&provider)?.get_password() {
+        Ok(secret) => Some(secret),
+        Err(keyring::Error::NoEntry) if is_local => None,
+        Err(keyring::Error::NoEntry) => {
+            return Err("No API key is saved for this AI provider yet.".to_string())
+        }
+        Err(other) => {
+            return Err(format!("Could not read the stored AI provider key: {other}"))
+        }
+    };
 
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
@@ -124,15 +132,25 @@ pub async fn ai_extract(
 
     let root = base_url.trim_end_matches('/');
     let request = match provider.as_str() {
-        "anthropic" => client
-            .post(format!("{root}/v1/messages"))
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&anthropic_body(&model, &prompt, &schema, &image_base64, &image_mime)),
-        "openai" => client
-            .post(format!("{root}/chat/completions"))
-            .bearer_auth(&api_key)
-            .json(&openai_body(&model, &prompt, &image_base64, &image_mime)),
+        "anthropic" => {
+            let builder = client
+                .post(format!("{root}/v1/messages"))
+                .header("anthropic-version", "2023-06-01")
+                .json(&anthropic_body(&model, &prompt, &schema, &image_base64, &image_mime));
+            match &api_key {
+                Some(key) => builder.header("x-api-key", key),
+                None => builder,
+            }
+        }
+        "openai" => {
+            let builder = client
+                .post(format!("{root}/chat/completions"))
+                .json(&openai_body(&model, &prompt, &image_base64, &image_mime));
+            match &api_key {
+                Some(key) => builder.bearer_auth(key),
+                None => builder,
+            }
+        }
         other => return Err(format!("Unknown AI provider \"{other}\".")),
     };
 
@@ -274,14 +292,17 @@ mod tests {
 
     #[test]
     fn allows_https_and_refuses_plain_http_to_the_internet() {
-        assert!(check_destination("https://api.anthropic.com").is_ok());
+        assert_eq!(check_destination("https://api.anthropic.com"), Ok(false));
         assert!(check_destination("http://example.com/v1").is_err());
     }
 
+    // The bool is what decides whether a key is required, so it is asserted
+    // rather than merely "did not error": getting it wrong either strands the
+    // local workflow or lets a key-less request reach a real provider.
     #[test]
     fn allows_plain_http_on_loopback_where_local_models_live() {
-        assert!(check_destination("http://localhost:11434/v1").is_ok());
-        assert!(check_destination("http://127.0.0.1:1234/v1").is_ok());
+        assert_eq!(check_destination("http://localhost:11434/v1"), Ok(true));
+        assert_eq!(check_destination("http://127.0.0.1:1234/v1"), Ok(true));
     }
 
     #[test]

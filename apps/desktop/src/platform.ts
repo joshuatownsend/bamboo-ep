@@ -76,6 +76,25 @@ export const aiKeyStore = {
 };
 
 /**
+ * Does this configuration need an API key at all?
+ *
+ * A model server on this machine takes no credentials. Requiring one anyway
+ * would make the single configuration that sends nothing off the computer the
+ * one configuration nobody can use without first inventing a fake secret.
+ */
+export function aiNeedsKey(settings: AiSettings): boolean {
+  const { baseUrl } = resolveAiSettings(settings);
+  try {
+    const host = new URL(baseUrl).hostname;
+    return !["localhost", "127.0.0.1", "::1", "[::1]"].includes(host);
+  } catch {
+    // An address that will not parse is refused by the Rust side anyway; say a
+    // key IS needed so the UI does not offer a path that cannot work.
+    return true;
+  }
+}
+
+/**
  * Fill in whichever of model and address the user left blank.
  *
  * Exported because the manifest has to record the model that actually examined
@@ -219,6 +238,11 @@ export function directoryWriter(
  */
 export function listExportDirectory(directory: string): Promise<string[]> {
   return invoke("list_export_directory", { directory });
+}
+
+/** Remove a file from the export folder. Absence counts as success. */
+export function deleteExportFile(directory: string, filename: string): Promise<void> {
+  return invoke("delete_export_file", { directory, filename });
 }
 
 /** Read a file back out of the export folder, or null if it is not there. */
