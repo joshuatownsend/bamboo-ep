@@ -128,7 +128,7 @@ the user has already committed. A contradiction discovered here means going back
 re-running.
 
 **Placement (b): a separate verification pass before Review.** Requires downloading
-candidate files earlier — for `avfrd` that is 78 files, which the existing bounded worker
+candidate files earlier — for the probed account that is 78 files, which the existing bounded worker
 pool already handles. Verification results then feed the Review screen directly, and the
 mislabel is caught *at the moment the user is deciding*. Downside: pays download and API
 cost for files the user may exclude, and puts a slow step in front of the screen the user

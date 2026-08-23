@@ -101,11 +101,12 @@ independently, so one refusal does not hide the rest.
 
 ### Findings
 
-Probed against the **avfrd** company on 2026-08-21:
+Probed against a real company account on 2026-08-21 (the company is referred to
+below as `{company}` — substitute your own subdomain):
 
 | Question | Answer |
 |---|---|
-| Endpoint form | **modern** — `https://avfrd.bamboohr.com/api/v1` answered; the legacy gateway fallback was not needed |
+| Endpoint form | **modern** — `https://{company}.bamboohr.com/api/v1` answered; the legacy gateway fallback was not needed |
 | `/training/type` readable | **yes** — 885 training types returned, so records get real certification names |
 | Populated sources | Training records **166**, certifications table **1**, employee files **78** |
 
@@ -211,7 +212,7 @@ Everything below compiles and passes tests, but **no request has yet been made
 against a real BambooHR account**. In rough order of what to do first:
 
 1. ~~Run the probe with a real key.~~ **Done** — see Findings above. All three
-   questions answered against the `avfrd` account.
+   questions answered against a real account.
 2. **Click through `pnpm tauri dev`.** The keychain commands, the plugin-http
    host allowlist, and the dialog/filesystem plugins have compiled but never
    executed. The capability allowlist in particular can only fail at runtime —
