@@ -432,6 +432,35 @@ describe("executePull: document checks in the manifest", () => {
     expect(readManifest(fs).entries[0]?.verification).toBeNull();
   });
 
+  // A failed attempt is still recorded, but it is not a verified certificate.
+  // Counting it as one let a manifest report everything verified when every
+  // single request had failed - the worst possible signal for Part 2.
+  it("counts a failed attempt as attempted, not as verified", async () => {
+    const fs = memoryFs();
+    const failed = {
+      ...verification("100", "confirms"),
+      extracted: null,
+      error: "The AI provider returned 400: credit balance is too low",
+    };
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": failed },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.summary.verified).toBe(0);
+    expect(manifest.summary.verificationFailed).toBe(1);
+    // Still present, so "we asked and could not tell" survives into Part 2.
+    expect(manifest.entries[0]?.verification?.error).toMatch(/credit balance/);
+  });
+
   // Decision: a contradicted check warns, it never blocks. The certificate is
   // still downloaded and still reaches the manifest.
   it("warns about a contradiction without withholding the file", async () => {

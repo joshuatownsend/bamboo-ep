@@ -90,6 +90,14 @@ export function ReviewScreen({
   useEffect(() => {
     setAssignments(proposed);
     setExcluded(new Set());
+    // The checks go with them. A re-match can point an item at a different
+    // file, and a verdict formed against the old one would sit beside the new
+    // file looking like a judgment on it - green or warning, either way wrong,
+    // and read at the moment the user decides whether to save.
+    checks.forgetAll();
+    // `checks` is a fresh object each render; depending on it would clear the
+    // checks continuously. The plan changing is the only trigger wanted here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proposed]);
 
   const filesById = useMemo(

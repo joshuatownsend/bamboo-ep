@@ -46,8 +46,10 @@ export interface Manifest {
     withFile: number;
     withoutFile: number;
     filesWithoutRecord: number;
-    /** Entries whose certificate was read and checked against the record. */
+    /** Entries whose certificate was successfully read and checked. */
     verified: number;
+    /** Entries where a check was attempted but could not be completed. */
+    verificationFailed: number;
     /**
      * Entries where that check disagreed with the record. Surfaced at the top
      * level so Part 2 can refuse, or warn, without walking every entry.
@@ -123,9 +125,18 @@ export function buildManifest(args: {
   warnings?: string[];
 }): Manifest {
   const withFile = args.entries.filter((e) => e.file != null).length;
-  const verified = args.entries.filter((e) => e.verification != null).length;
+  // A check that failed to reach the provider is still recorded, deliberately -
+  // "we asked and could not tell" is not "we never asked". But it is NOT a
+  // verified certificate, and counting it as one would let a manifest report
+  // every entry verified when every single request had failed.
+  const verified = args.entries.filter(
+    (e) => e.verification != null && e.verification.error == null,
+  ).length;
   const contradicted = args.entries.filter(
     (e) => e.verification != null && isTroubling(e.verification),
+  ).length;
+  const verificationFailed = args.entries.filter(
+    (e) => e.verification?.error != null,
   ).length;
   return {
     manifestVersion: MANIFEST_VERSION,
@@ -147,6 +158,7 @@ export function buildManifest(args: {
       filesWithoutRecord: args.orphanFileCount,
       verified,
       contradicted,
+      verificationFailed,
     },
     warnings: args.warnings ?? [],
   };

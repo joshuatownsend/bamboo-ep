@@ -205,6 +205,14 @@ export function listExportDirectory(directory: string): Promise<string[]> {
   return invoke("list_export_directory", { directory });
 }
 
+/** Read a file back out of the export folder, or null if it is not there. */
+export function readExportFile(
+  directory: string,
+  filename: string,
+): Promise<string | null> {
+  return invoke("read_export_file", { directory, filename });
+}
+
 export async function ensureDirectory(directory: string): Promise<void> {
   await invoke("ensure_export_directory", { directory });
 }

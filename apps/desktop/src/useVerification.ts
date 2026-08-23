@@ -39,6 +39,8 @@ export interface Verifications {
   ) => Promise<void>;
   /** Forget a check, for when its row has been repointed. */
   forget: (itemKey: string) => void;
+  /** Forget every check, for when the whole plan has been replaced. */
+  forgetAll: () => void;
   busy: boolean;
 }
 
@@ -187,10 +189,15 @@ export function useVerification(input: VerificationInput): Verifications {
     setStates((prev) => ({ ...prev, [itemKey]: IDLE }));
   }, []);
 
+  const forgetAll = useCallback(() => {
+    setAll({});
+    setStates({});
+  }, []);
+
   const stateOf = useCallback(
     (itemKey: string): VerifyState => states[itemKey] ?? IDLE,
     [states],
   );
 
-  return { stateOf, all, verify, verifyMany, forget, busy };
+  return { stateOf, all, verify, verifyMany, forget, forgetAll, busy };
 }

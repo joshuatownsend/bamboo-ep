@@ -109,6 +109,22 @@ fn list_export_directory(directory: String) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Read one file back out of the export folder, as text.
+///
+/// Used to identify a previous export before its contents may be replaced.
+/// Returns `None` when the file is absent or is not valid UTF-8, both of which
+/// simply mean "this is not a manifest we wrote".
+#[tauri::command]
+fn read_export_file(directory: String, filename: String) -> Result<Option<String>, String> {
+    let name = safe_filename(&filename)?;
+    let path = std::path::PathBuf::from(&directory).join(name);
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Could not read \"{filename}\": {e}")),
+    }
+}
+
 /// Write one file into the export folder.
 ///
 /// `overwrite` is false for a folder this app has not written before, and the
@@ -173,6 +189,7 @@ pub fn run() {
             delete_api_key,
             ensure_export_directory,
             list_export_directory,
+            read_export_file,
             write_export_file,
             ai::save_ai_key,
             ai::has_ai_key,

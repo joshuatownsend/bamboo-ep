@@ -6,6 +6,7 @@ import {
   MANIFEST_FILENAME,
   executePull,
   gatherWorkspace,
+  parseManifest,
   runProbe,
   serializeManifest,
 } from "@bamboo-ep/core";
@@ -25,6 +26,7 @@ import {
   ensureDirectory,
   listExportDirectory,
   loadSettings,
+  readExportFile,
   platformFetch,
   saveSettings,
 } from "./platform";
@@ -152,12 +154,15 @@ export default function App() {
       try {
         await ensureDirectory(directory);
 
-        // A folder holding our own manifest is a previous export, where
-        // replacing last run's output is the intent. Any other folder belongs
-        // to someone else, so every name already in it is reserved and the
-        // write itself refuses to replace anything.
+        // Replacing is allowed only where the folder holds a previous export
+        // OF THIS EMPLOYEE. The presence of a manifest is not enough on its
+        // own: settings keep a single remembered outputDir while credentials
+        // and matches both support several companies, so exporting a second
+        // employee into the same folder would otherwise delete the first
+        // one's certificates without a word. The manifest already records the
+        // subdomain and employee id, so it is read rather than merely counted.
         const existing = await listExportDirectory(directory);
-        const isPriorExport = existing.includes(MANIFEST_FILENAME);
+        const isPriorExport = await folderBelongsTo(directory, existing, connection);
         const write = directoryWriter(directory, isPriorExport);
 
         const pullResult = await executePull({
@@ -386,6 +391,32 @@ export default function App() {
         )}
       </section>
     </main>
+  );
+}
+
+/**
+ * Is this folder a previous export of the same employee's records?
+ *
+ * Anything else - another employee, another company, an unreadable or
+ * hand-edited manifest, no manifest at all - is treated as someone else's
+ * folder, whose contents are then reserved rather than replaced.
+ */
+async function folderBelongsTo(
+  directory: string,
+  existing: readonly string[],
+  connection: Connection,
+): Promise<boolean> {
+  if (!existing.includes(MANIFEST_FILENAME)) return false;
+
+  const text = await readExportFile(directory, MANIFEST_FILENAME).catch(() => null);
+  if (!text) return false;
+
+  const parsed = parseManifest(text);
+  if ("error" in parsed) return false;
+
+  return (
+    parsed.manifest.source?.subdomain === connection.credentials.subdomain &&
+    parsed.manifest.source?.employeeId === connection.employeeId
   );
 }
 
