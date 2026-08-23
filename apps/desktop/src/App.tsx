@@ -250,47 +250,70 @@ export default function App() {
         // replace its own files without ever touching one of the user's.
         const replace = directoryWriter(directory, true);
 
-        let finalResult = pullResult;
+        // Two separate operations, two separate outcomes. Sharing one catch
+        // meant a failure to rewrite the manifest was reported as the PDF
+        // having failed - while the PDF sat on disk, unclaimed by a manifest
+        // that had not been updated, so the NEXT export saw a fixed output
+        // name occupied by a file it did not own and refused the folder.
+        let pdfWritten = false;
+        const problems: string[] = [];
+
         try {
           await write(SUMMARY_PDF_FILENAME, buildSummaryPdf(pullResult.manifest));
-          const manifest = {
-            ...pullResult.manifest,
-            outputs: [...pullResult.manifest.outputs, SUMMARY_PDF_FILENAME],
-          };
-          finalResult = { ...pullResult, manifest };
-          await replace(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
+          pdfWritten = true;
         } catch (err) {
-          const message = `The printable summary could not be created: ${messageOf(err)}. Every certificate and the spreadsheet summary were still saved.`;
-          const manifest = {
-            ...pullResult.manifest,
-            warnings: [...pullResult.manifest.warnings, message],
-          };
-          finalResult = {
-            ...pullResult,
-            manifest,
-            // Recorded as a failure, not only as a warning. The result screen
-            // decides "Finished" from this list, so a run that quietly claims
-            // a PDF it never wrote would otherwise look like a clean one.
-            failures: [
-              ...pullResult.failures,
-              { fileId: SUMMARY_PDF_FILENAME, label: "Printable summary", message },
-            ],
-          };
-          // executePull wrote manifest.json before this point, so the warning
-          // would otherwise live only in memory - invisible to Part 2 and to
-          // anyone reading the folder later.
-          //
+          problems.push(
+            `The printable summary could not be created: ${messageOf(err)}. ` +
+              "Every certificate and the spreadsheet summary were still saved.",
+          );
+        }
+
+        // Rewritten whatever happened, so `outputs` names what is actually in
+        // the folder. executePull wrote the manifest before the PDF existed.
+        const manifest = {
+          ...pullResult.manifest,
+          outputs: pdfWritten
+            ? [...pullResult.manifest.outputs, SUMMARY_PDF_FILENAME]
+            : pullResult.manifest.outputs,
+        };
+
+        try {
           // Deliberately NOT `write`: on a first export into an empty folder
           // that writer is in create-new mode, so rewriting a file it just
           // created is guaranteed to fail. Replacing our own manifest, seconds
           // after writing it, is the one case where overwriting is
           // unambiguously right.
-          try {
-            await replace(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
-          } catch {
-            /* The manifest on disk is then simply the one without this note. */
+          await replace(
+            MANIFEST_FILENAME,
+            encodeUtf8(serializeManifest({ ...manifest, warnings: [...manifest.warnings, ...problems] })),
+          );
+        } catch (err) {
+          problems.push(`The manifest could not be updated: ${messageOf(err)}.`);
+          // The manifest on disk is now the one executePull wrote, which does
+          // not claim the PDF. Leaving the PDF there would make the folder
+          // disagree with its own manifest and lock the next export out of it,
+          // so the unclaimed file goes rather than the record being wrong.
+          if (pdfWritten) {
+            await deleteExportFile(directory, SUMMARY_PDF_FILENAME).catch(() => undefined);
+            pdfWritten = false;
           }
         }
+
+        const finalResult = {
+          ...pullResult,
+          manifest: { ...manifest, warnings: [...manifest.warnings, ...problems] },
+          // Recorded as failures, not only as warnings. The result screen
+          // decides "Finished" from this list, so a run that quietly claims a
+          // PDF it never wrote would otherwise look like a clean one.
+          failures: [
+            ...pullResult.failures,
+            ...problems.map((message) => ({
+              fileId: SUMMARY_PDF_FILENAME,
+              label: "Printable summary",
+              message,
+            })),
+          ],
+        };
 
         // Files the last export produced that this one did not. A changed
         // filename template, an excluded record, or a file removed in BambooHR

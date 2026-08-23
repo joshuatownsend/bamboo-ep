@@ -181,9 +181,21 @@ fn write_export_file(
                 ),
                 _ => format!("Could not write \"{filename}\": {e}"),
             })?;
-        return file
-            .write_all(&contents)
-            .map_err(|e| format!("Could not write \"{filename}\": {e}"));
+        // A write that dies partway - a full disk, a revoked permission -
+        // would otherwise leave a truncated certificate sitting under its
+        // real name. `executePull` records that item as having no file, so
+        // nothing in the manifest or the summary would mention it, and the
+        // next export would reserve the name as unowned and write a suffixed
+        // copy alongside. Removing our own half-written file is unambiguous:
+        // `create_new` proved nothing else held the name a moment ago.
+        return match file.write_all(&contents) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(&path);
+                Err(format!("Could not write \"{filename}\": {e}"))
+            }
+        };
     }
 
     // Replacing a file we wrote before. Deleting first and then writing would
