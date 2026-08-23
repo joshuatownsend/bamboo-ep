@@ -128,6 +128,16 @@ export const EXTRACTION_JSON_SCHEMA = {
 
 // --- Parsing the model's answer ------------------------------------------------
 
+/** The fields asked for. An answer without them all is not an answer. */
+const TEXT_FIELDS = [
+  "certificationName",
+  "issuedDate",
+  "expirationDate",
+  "personName",
+] as const;
+
+const REQUIRED_FIELDS = [...TEXT_FIELDS, "documentType", "legible"] as const;
+
 /**
  * Turn whatever the model returned into an extraction, or an explanation.
  *
@@ -158,6 +168,28 @@ export function parseExtraction(
   }
 
   const row = raw as Record<string, unknown>;
+
+  // A model that returns `{}` has told us nothing, but coercing every absent
+  // field to null produced a perfectly well-formed extraction with no error -
+  // which the manifest then counted as a VERIFIED certificate. Silence has to
+  // be reported as silence, so the six fields asked for must actually be
+  // present and of the right kind before any of this counts as an answer.
+  const missing = REQUIRED_FIELDS.filter((field) => !(field in row));
+  if (missing.length > 0) {
+    return {
+      error: `The model's answer left out ${missing.join(", ")}.`,
+    };
+  }
+  const malformed = TEXT_FIELDS.filter(
+    (field) => row[field] != null && typeof row[field] !== "string",
+  );
+  if (malformed.length > 0) {
+    return { error: `The model's answer had the wrong type for ${malformed.join(", ")}.` };
+  }
+  if (typeof row.legible !== "boolean") {
+    return { error: "The model's answer did not say whether the page was legible." };
+  }
+
   const documentType = DOCUMENT_TYPES.includes(row.documentType as DocumentType)
     ? (row.documentType as DocumentType)
     : "other";
@@ -169,9 +201,7 @@ export function parseExtraction(
       expirationDate: cleanIsoDate(row.expirationDate),
       personName: cleanText(row.personName),
       documentType,
-      // Absent means "the model did not say it was illegible", which is the
-      // ordinary case; only an explicit false marks a bad scan.
-      legible: row.legible !== false && documentType !== "unreadable",
+      legible: row.legible && documentType !== "unreadable",
     },
   };
 }

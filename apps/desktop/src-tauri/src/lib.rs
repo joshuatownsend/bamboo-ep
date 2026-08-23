@@ -191,14 +191,24 @@ fn write_export_file(
     // disk or a permission change mid-write would leave the user with neither
     // the old file nor a complete new one. So the new contents are written
     // beside it in full, and only then take its place.
-    let temp = dir.join(format!("{name}.bamboo-ep-part"));
-    let _ = std::fs::remove_file(&temp);
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(|e| format!("Could not write \"{filename}\": {e}"))?;
+    // Claimed with `create_new` rather than cleared first. The reservation
+    // logic protects the user's FINAL filenames, and cannot reach a scratch
+    // path derived from one - so a file of theirs that happened to sit at this
+    // name would have been deleted by a blind remove. Trying a few suffixes
+    // costs nothing and cannot destroy anything.
+    let (temp, mut file) = (0..16)
+        .find_map(|attempt| {
+            let candidate = dir.join(format!("{name}.bamboo-ep-part{attempt}"));
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+                .ok()
+                .map(|file| (candidate, file))
+        })
+        .ok_or_else(|| {
+            format!("Could not write \"{filename}\": no free temporary name in that folder.")
+        })?;
 
     let written = file
         .write_all(&contents)
@@ -282,9 +292,17 @@ mod tests {
 
         // With permission, the replacement lands whole and leaves no scratch
         // file behind.
+        // A file of the user's sitting on the derived scratch name must survive
+        // the replacement rather than being cleared out of the way.
+        std::fs::write(dir.join("cert.pdf.bamboo-ep-part0"), b"theirs").unwrap();
+
         write_export_file(directory.clone(), "cert.pdf".into(), b"second".to_vec(), true).unwrap();
         assert_eq!(std::fs::read(dir.join("cert.pdf")).unwrap(), b"second");
-        assert!(!dir.join("cert.pdf.bamboo-ep-part").exists());
+        assert_eq!(
+            std::fs::read(dir.join("cert.pdf.bamboo-ep-part0")).unwrap(),
+            b"theirs"
+        );
+        assert!(!dir.join("cert.pdf.bamboo-ep-part1").exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

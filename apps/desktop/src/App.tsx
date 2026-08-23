@@ -178,7 +178,16 @@ export default function App() {
         // taken, and the write refuses to replace them - after every
         // certificate has been downloaded, leaving a folder of files with no
         // manifest to describe them. Better to say so before starting.
-        const blocked = FIXED_OUTPUT_NAMES.filter((name) => plan.reserved.includes(name));
+        // Compared case-insensitively, because the filesystems this runs on
+            // mostly are. `Manifest.json` already occupies the path that
+            // `manifest.json` needs, and a case-sensitive check would let the
+            // export download every certificate before failing on the one
+            // filename it cannot vary. FilenameAllocator already folds case
+            // for exactly this reason.
+        const takenLower = new Set(plan.reserved.map((name) => name.toLowerCase()));
+        const blocked = FIXED_OUTPUT_NAMES.filter((name) =>
+          takenLower.has(name.toLowerCase()),
+        );
         if (blocked.length > 0) {
           throw new Error(
             `That folder already contains ${blocked.join(", ")}, which this export ` +

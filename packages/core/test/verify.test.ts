@@ -82,6 +82,30 @@ describe("parseExtraction", () => {
     expect("extracted" in result && result.extracted.legible).toBe(false);
   });
 
+  // An empty object used to coerce into a perfectly well-formed extraction
+  // with no error, which the manifest then counted as a VERIFIED certificate.
+  // Silence has to be reported as silence.
+  it("rejects an answer that omits the fields rather than inventing nulls", () => {
+    const result = parseExtraction("{}");
+    expect("error" in result && result.error).toMatch(/left out/);
+  });
+
+  it("rejects an answer whose fields are the wrong type", () => {
+    const result = parseExtraction(
+      '{"certificationName":42,"issuedDate":null,"expirationDate":null,' +
+        '"personName":null,"documentType":"card","legible":true}',
+    );
+    expect("error" in result && result.error).toMatch(/wrong type/);
+  });
+
+  it("rejects an answer that does not say whether the page was legible", () => {
+    const result = parseExtraction(
+      '{"certificationName":"CPR","issuedDate":null,"expirationDate":null,' +
+        '"personName":null,"documentType":"card","legible":"yes"}',
+    );
+    expect("error" in result && result.error).toMatch(/legible/);
+  });
+
   it("explains itself rather than throwing when the model returned prose", () => {
     const result = parseExtraction("I'm sorry, I can't read that image.");
     expect("error" in result && result.error).toMatch(/did not return JSON/);
