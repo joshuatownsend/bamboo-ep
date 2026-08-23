@@ -87,7 +87,15 @@ export function AiSettingsPanel({ settings, onChange, onKeyPresenceChange }: Pro
         <span className="field-label">Provider</span>
         <select
           value={settings.provider}
-          onChange={(e) => onChange({ ...settings, provider: e.target.value as AiProvider })}
+          // Model and address are cleared with the provider, not carried over.
+          // An OpenAI address ending in /v1 kept across a switch to Anthropic
+          // produces requests to <old-address>/v1/messages with an OpenAI model
+          // name - every check failing, for a reason nothing on screen explains.
+          // Empty means "use this provider's default", which is what the
+          // placeholders already show.
+          onChange={(e) =>
+            onChange({ provider: e.target.value as AiProvider, model: "", baseUrl: "" })
+          }
         >
           {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
             <option key={value} value={value}>

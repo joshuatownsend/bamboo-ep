@@ -187,11 +187,11 @@ asking every employee to invent a second secret in order to store the first.
 
 ```bash
 pnpm install
-pnpm test        # 137 unit tests in packages/core
+pnpm test        # 138 unit tests in packages/core
 pnpm typecheck
 ```
 
-There are 8 further tests on the Rust side (`cd apps/desktop/src-tauri && cargo
+There are 9 further tests on the Rust side (`cd apps/desktop/src-tauri && cargo
 test`), covering the filename guard and the AI client's destination rule.
 
 Tests cover the parts with rules worth pinning down: Windows filename sanitisation

@@ -152,28 +152,68 @@ fn write_export_file(
         .map_err(|e| format!("Could not create the folder \"{directory}\": {e}"))?;
 
     let path = dir.join(name);
-    if overwrite {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("Could not replace \"{filename}\": {e}")),
-        }
+    if !overwrite {
+        // Nothing here can be lost - `create_new` refuses if anything already
+        // holds the name, including a symlink - so the bytes go straight down.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => format!(
+                    "\"{filename}\" already exists in that folder and was left untouched. \
+                     Choose an empty folder, or one this app exported to before."
+                ),
+                _ => format!("Could not write \"{filename}\": {e}"),
+            })?;
+        return file
+            .write_all(&contents)
+            .map_err(|e| format!("Could not write \"{filename}\": {e}"));
     }
+
+    // Replacing a file we wrote before. Deleting first and then writing would
+    // destroy a good copy before knowing a replacement can be produced: a full
+    // disk or a permission change mid-write would leave the user with neither
+    // the old file nor a complete new one. So the new contents are written
+    // beside it in full, and only then take its place.
+    let temp = dir.join(format!("{name}.bamboo-ep-part"));
+    let _ = std::fs::remove_file(&temp);
 
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&path)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => format!(
-                "\"{filename}\" already exists in that folder and was left untouched. \
-                 Choose an empty folder, or one this app exported to before."
-            ),
-            _ => format!("Could not write \"{filename}\": {e}"),
-        })?;
+        .open(&temp)
+        .map_err(|e| format!("Could not write \"{filename}\": {e}"))?;
 
-    file.write_all(&contents)
-        .map_err(|e| format!("Could not write \"{filename}\": {e}"))
+    let written = file
+        .write_all(&contents)
+        // Flushed to the device before the old copy is touched, so a crash
+        // between the two leaves the previous export intact rather than a
+        // half-written file wearing its name.
+        .and_then(|()| file.sync_all());
+    drop(file);
+
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("Could not write \"{filename}\": {e}"));
+    }
+
+    // `rename` refuses an existing destination on Windows, so the old entry is
+    // unlinked first. The window that leaves is between two metadata
+    // operations, with the replacement already complete on disk.
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            return Err(format!("Could not replace \"{filename}\": {e}"));
+        }
+    }
+
+    std::fs::rename(&temp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("Could not write \"{filename}\": {e}")
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -202,7 +242,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_filename;
+    use super::{safe_filename, write_export_file};
+
+    /// Exercises the replace path against a real filesystem, because the whole
+    /// point of it is what survives when a write goes wrong - which no amount
+    /// of pure-function testing can observe.
+    #[test]
+    fn replacing_a_prior_export_leaves_no_partial_file() {
+        let dir = std::env::temp_dir().join("bamboo-ep-write-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let directory = dir.to_str().unwrap().to_string();
+
+        // First write into a fresh folder: nothing to replace.
+        write_export_file(directory.clone(), "cert.pdf".into(), b"first".to_vec(), false).unwrap();
+        assert_eq!(std::fs::read(dir.join("cert.pdf")).unwrap(), b"first");
+
+        // Writing again without permission to replace must leave it alone.
+        let refused =
+            write_export_file(directory.clone(), "cert.pdf".into(), b"second".to_vec(), false);
+        assert!(refused.is_err());
+        assert_eq!(std::fs::read(dir.join("cert.pdf")).unwrap(), b"first");
+
+        // With permission, the replacement lands whole and leaves no scratch
+        // file behind.
+        write_export_file(directory.clone(), "cert.pdf".into(), b"second".to_vec(), true).unwrap();
+        assert_eq!(std::fs::read(dir.join("cert.pdf")).unwrap(), b"second");
+        assert!(!dir.join("cert.pdf.bamboo-ep-part").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn accepts_ordinary_certificate_names() {

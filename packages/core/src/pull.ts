@@ -151,12 +151,23 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     workspace.plan.matches.map((m: Match) => [`${m.fileId}:${m.itemKey}`, m]),
   );
 
+  // Confirmations are keyed by file id, but they are WALKED in record order.
+  // Filenames are allocated in this order, and two records can render the same
+  // name, so whoever is walked first takes the unsuffixed one. Object key order
+  // for numeric-looking keys is numeric, which has nothing to do with the order
+  // the review screen displays - so the row promised "CPR.pdf" could quietly be
+  // handed "CPR (2).pdf" while another record took the plain name.
+  const fileIdByItemKey = new Map(
+    Object.entries(decisions.confirmed).map(([fileId, itemKey]) => [itemKey, fileId]),
+  );
+
   const pairs: Array<{ item: TrainingItem; file: EmployeeFile; matched: Match | undefined }> = [];
-  for (const [fileId, itemKey] of Object.entries(decisions.confirmed)) {
-    const item = itemsByKey.get(itemKey);
+  for (const item of workspace.items) {
+    const fileId = fileIdByItemKey.get(item.key);
+    if (fileId === undefined || excluded.has(item.key)) continue;
     const file = filesById.get(fileId);
-    if (!item || !file || excluded.has(itemKey)) continue;
-    pairs.push({ item, file, matched: scoreByPair.get(`${fileId}:${itemKey}`) });
+    if (!file) continue;
+    pairs.push({ item, file, matched: scoreByPair.get(`${fileId}:${item.key}`) });
   }
 
   const pairedFileIds = new Set(pairs.map((p) => p.file.id));

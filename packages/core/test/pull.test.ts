@@ -372,6 +372,37 @@ describe("runPool", () => {
   });
 });
 
+describe("executePull: filename collisions", () => {
+  // The review screen allocates in record order. Confirmations are keyed by
+  // file id, and walking THOSE gave numeric-key order - so the row promised
+  // the plain name could be handed the suffixed one, and vice versa. The two
+  // must agree, because the preview is a promise about what gets written.
+  it("allocates collision suffixes in record order, not file-id order", async () => {
+    const items = [
+      item({ key: "training:1", name: "CPR", completed: "2025-06-01" }),
+      item({ key: "training:2", name: "CPR", completed: "2025-06-01" }),
+    ];
+    // Deliberately reversed: the first record's file sorts second by id.
+    const files = [file({ id: "900", name: "a" }), file({ id: "100", name: "b" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "900": "training:1", "100": "training:2" } },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    const savedAs = (key: string) =>
+      manifest.entries.find((e) => e.key === key)?.file?.savedAs;
+
+    expect(savedAs("training:1")).toBe("CPR - 2025-06-01.pdf");
+    expect(savedAs("training:2")).toBe("CPR - 2025-06-01 (2).pdf");
+  });
+});
+
 describe("executePull: document checks in the manifest", () => {
   const verification = (bambooFileId: string, name: "confirms" | "contradicts") => ({
     provider: "anthropic",
