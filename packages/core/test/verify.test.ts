@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  EXTRACTION_PROMPT,
   cleanIsoDate,
   compareExtraction,
   corePart,
@@ -114,6 +115,24 @@ describe("parseExtraction", () => {
   it("explains itself rather than throwing when the model returned prose", () => {
     const result = parseExtraction("I'm sorry, I can't read that image.");
     expect("error" in result && result.error).toMatch(/did not return JSON/);
+  });
+});
+
+describe("EXTRACTION_PROMPT", () => {
+  // A live run returned the heading of a commendation-style certificate rather
+  // than the credential named in its body text. The model answered the
+  // question it was asked; the question was wrong.
+  it("tells the model to prefer the credential over a generic heading", () => {
+    expect(EXTRACTION_PROMPT).toMatch(/WHOLE page/);
+    expect(EXTRACTION_PROMPT).toMatch(/Certificate of Commendation/);
+  });
+
+  it("still insists on null over a guess", () => {
+    // Whitespace-tolerant: the prompt is wrapped, so a literal space would
+    // fail on the line break rather than on the wording.
+    expect(EXTRACTION_PROMPT.replace(/\s+/g, " ")).toMatch(
+      /null is always better than a guess/,
+    );
   });
 });
 

@@ -30,13 +30,18 @@ export interface Preview {
 }
 
 /** Longest edge of the rendered image, in pixels. */
-const THUMBNAIL_EDGE = 1100;
+const PAGE_EDGE = 1568;
 
 /**
- * 1100px is a deliberate compromise. A 300px thumbnail is enough to tell two
- * certificates apart at a glance but not enough for a model to read a name and
- * a date off it, and rendering twice would double the work for no benefit. The
- * <img> tag is scaled down by CSS; the AI path gets the full resolution.
+ * One render serves two readers, so it is sized for the harder one.
+ *
+ * A 300px thumbnail is enough for a person to tell two certificates apart, but
+ * a model has to read body text - and on a certificate the credential is
+ * frequently NOT the heading: the page says "Certificate of Commendation" in
+ * display type and names the actual qualification in a line of ordinary prose
+ * underneath. A live run missed exactly that. 1568px is the largest edge
+ * Anthropic's vision models use before downscaling, so it is the most detail
+ * available for the same cost. The <img> tag is scaled down by CSS.
  */
 export async function renderPreview(
   bytes: Uint8Array,
@@ -71,7 +76,7 @@ async function renderPdfFirstPage(bytes: Uint8Array): Promise<Preview> {
   try {
     const page = await doc.getPage(1);
     const base = page.getViewport({ scale: 1 });
-    const scale = THUMBNAIL_EDGE / Math.max(base.width, base.height);
+    const scale = PAGE_EDGE / Math.max(base.width, base.height);
     const viewport = page.getViewport({ scale: Math.min(scale, 4) });
 
     const canvas = document.createElement("canvas");
@@ -89,9 +94,10 @@ async function renderPdfFirstPage(bytes: Uint8Array): Promise<Preview> {
     await page.render({ canvas, viewport }).promise;
     // JPEG rather than PNG: a scanned page compresses roughly 5-10x better,
     // which matters because these data URLs are also what gets uploaded to a
-    // model, and image tokens are billed by size.
+    // model. Quality is set high because the payload is TEXT - JPEG artefacts
+    // land hardest on small lettering, which is exactly what has to be read.
     return {
-      dataUrl: canvas.toDataURL("image/jpeg", 0.82),
+      dataUrl: canvas.toDataURL("image/jpeg", 0.92),
       mimeType: "image/jpeg",
       rasterised: true,
     };

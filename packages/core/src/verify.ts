@@ -94,7 +94,14 @@ anything. If a field is not legible or not present, return null for it - a null
 is always better than a guess.
 
 Fields:
-- certificationName: the title of the certification or course, as printed.
+- certificationName: the specific certification, course, or credential this
+  document attests. Look at the WHOLE page, not just the heading. Many
+  certificates are headed with a generic phrase - "Certificate of Completion",
+  "Certificate of Commendation", "Award of Achievement" - while the credential
+  itself is named in the body text. Prefer the credential over the heading: a
+  page headed "Certificate of Commendation" reading "has met the requirements
+  for FIREFIGHTER I" is a certification named "Firefighter I", not
+  "Commendation". Only fall back to the heading if no credential is named.
 - issuedDate: the date it was earned, completed, or issued (YYYY-MM-DD).
 - expirationDate: the expiry or renewal date if one is printed (YYYY-MM-DD).
 - personName: the name of the person it was issued to, exactly as printed.
