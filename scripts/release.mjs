@@ -39,16 +39,20 @@ if (branch !== "main") {
   process.exit(1);
 }
 
-/** Rewrites one file, and fails loudly if the edit found nothing to change. */
+/**
+ * Rewrites one file, and fails loudly if the version is not where it was
+ * expected. A file already AT the requested version is fine and rewrites to
+ * itself - the first release tags a version the files were born with, and
+ * re-tagging after a failed release attempt is a normal thing to need.
+ */
 function bump(relativePath, pattern, replacement) {
   const path = join(root, relativePath);
   const before = readFileSync(path, "utf8");
-  const after = before.replace(pattern, replacement);
-  if (after === before) {
+  if (!pattern.test(before)) {
     console.error(`Could not find the version to bump in ${relativePath}.`);
     process.exit(1);
   }
-  writeFileSync(path, after);
+  writeFileSync(path, before.replace(pattern, replacement));
   return relativePath;
 }
 
@@ -74,7 +78,11 @@ touched.push(
 );
 
 git("add", ...touched);
-git("commit", "-m", `Release v${version}`);
+if (git("diff", "--cached", "--name-only")) {
+  git("commit", "-m", `Release v${version}`);
+} else {
+  console.log(`Every version file already says ${version}; tagging what is here.`);
+}
 git("tag", "-a", `v${version}`, "-m", `v${version}`);
 
 console.log(`\nTagged v${version}. Nothing has been pushed yet.`);
