@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildMatchPlan, scorePair, tokenize, tokenOverlap } from "../src/matching.js";
+import {
+  buildMatchPlan,
+  compareNumbers,
+  scorePair,
+  tokenize,
+  tokenOverlap,
+} from "../src/matching.js";
 import type { EmployeeFile, TrainingItem } from "../src/types.js";
 
 function item(partial: Partial<TrainingItem> & { key: string; name: string }): TrainingItem {
@@ -240,5 +246,58 @@ describe("buildMatchPlan", () => {
     expect(forced?.score).toBe(1);
     // The other record cannot now take file 100.
     expect(plan.matches.find((m) => m.itemKey === "training:1")?.fileId).not.toBe("100");
+  });
+});
+
+describe("compareNumbers", () => {
+  // A shared standard number used to mask a conflicting level, so the wrong
+  // rung of a certification ladder scored as agreement.
+  it("does not let a shared standard number excuse a different level", () => {
+    const result = compareNumbers("Firefighter II (NFPA 1001)", ["Firefighter III (NFPA 1001)"]);
+    expect(result.verdict).toBe("conflict");
+  });
+
+  // The other direction matters just as much: requiring every certification
+  // number to appear would reject a correct file for omitting the standard.
+  it("accepts a filename that simply leaves the standard number off", () => {
+    const result = compareNumbers("NFPA 1001 Firefighter I", ["Firefighter-1.pdf"]);
+    expect(result.verdict).toBe("agree");
+  });
+
+  it("stays silent when only one side carries a number at all", () => {
+    expect(compareNumbers("Bloodborne Pathogens", ["bbp-2024.pdf"]).verdict).toBe("silent");
+  });
+
+  it("ignores a browser's duplicate-download suffix", () => {
+    expect(compareNumbers("Fire Officer 2", ["Fire Officer 2 (1).pdf"]).verdict).toBe("agree");
+  });
+});
+
+describe("scorePair: a number conflict is disqualifying", () => {
+  // A penalty could always be outpaid by enough shared words: six matching
+  // tokens plus one wrong module number still cleared the proposal threshold.
+  it("scores a conflicting pair at zero rather than merely penalising it", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "Intro to Advanced Technical Rescue Module 1" }),
+      file({
+        id: "9",
+        name: "Introduction to Advanced Technical Rescue Module 2",
+        originalFileName: "Introduction-to-Advanced-Technical-Rescue-Module-2.pdf",
+        categoryName: "Certifications",
+      }),
+    );
+
+    expect(result.score).toBe(0);
+    expect(result.confidence).toBe("low");
+  });
+
+  it("leaves the record unmatched rather than proposing the conflicting file", () => {
+    const plan = buildMatchPlan(
+      [item({ key: "training:1", name: "Fire Officer 2" })],
+      [file({ id: "9", name: "Fire Officer 3 certificate", categoryName: "Certifications" })],
+    );
+
+    expect(plan.matches).toEqual([]);
+    expect(plan.unmatchedItemKeys).toEqual(["training:1"]);
   });
 });

@@ -48,6 +48,12 @@ export interface VerificationInput {
   /** Every record, so a contradiction can name the record that fits better. */
   items: readonly TrainingItem[];
   previews: Previews;
+  /**
+   * The file a row points at right now. Read when a check COMPLETES, not when
+   * it starts: a model call takes seconds, and the row can be repointed while
+   * it is in flight.
+   */
+  currentFileIdOf: (itemKey: string) => string | undefined;
 }
 
 export function useVerification(input: VerificationInput): Verifications {
@@ -57,11 +63,39 @@ export function useVerification(input: VerificationInput): Verifications {
   const running = useRef(0);
   const [busy, setBusy] = useState(false);
 
+  // Held in a ref, and refreshed on every render, so a check that started
+  // before a reassignment still reads the CURRENT answer when it finishes
+  // rather than the one captured in its closure.
+  const currentFileIdOf = useRef(input.currentFileIdOf);
+  currentFileIdOf.current = input.currentFileIdOf;
+
   const verify = useCallback(
     async (item: TrainingItem, fileId: string) => {
       setStates((prev) => ({ ...prev, [item.key]: { status: "running" } }));
       running.current += 1;
       setBusy(true);
+
+      const base = {
+        provider: settings.provider,
+        model: settings.model || "(provider default)",
+        verifiedAt: new Date().toISOString(),
+        bambooFileId: fileId,
+      };
+
+      /**
+       * Land a finished check, unless the row has moved on without it.
+       *
+       * A late result attached to a newly chosen file would show the reviewer
+       * a verdict about a document they are no longer looking at - a false
+       * green or a false warning at the exact moment they are deciding
+       * whether to save. `executePull` drops the mismatch before writing, but
+       * by then the decision has already been made on bad information.
+       */
+      const land = (verification: Verification, state: VerifyState) => {
+        if (currentFileIdOf.current(item.key) !== fileId) return;
+        setAll((prev) => ({ ...prev, [item.key]: verification }));
+        setStates((prev) => ({ ...prev, [item.key]: state }));
+      };
 
       try {
         const preview = await previews.ensure(fileId);
@@ -74,13 +108,6 @@ export function useVerification(input: VerificationInput): Verifications {
         });
 
         const parsed = parseExtraction(answer);
-        const base = {
-          provider: settings.provider,
-          model: settings.model || "(provider default)",
-          verifiedAt: new Date().toISOString(),
-          bambooFileId: fileId,
-        };
-
         // A model that answered unusably is recorded as such rather than
         // dropped. "We asked and could not tell" is a different state from
         // "we never asked", and the manifest has to be able to say so.
@@ -109,11 +136,27 @@ export function useVerification(input: VerificationInput): Verifications {
                 error: null,
               };
 
-        setAll((prev) => ({ ...prev, [item.key]: verification }));
-        setStates((prev) => ({ ...prev, [item.key]: { status: "done", verification } }));
+        land(verification, { status: "done", verification });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        setStates((prev) => ({ ...prev, [item.key]: { status: "failed", message } }));
+        // Recorded in `all`, not only in the UI. `all` is what reaches the
+        // manifest, and a dropped failure would be written as
+        // `verification: null` - indistinguishable from never having asked.
+        // The whole point of Verification.error is to keep that difference.
+        land(
+          {
+            ...base,
+            extracted: null,
+            verdicts: {
+              name: "inconclusive",
+              date: "inconclusive",
+              person: "inconclusive",
+            },
+            suggestedItemKey: null,
+            error: message,
+          },
+          { status: "failed", message },
+        );
       } finally {
         running.current -= 1;
         if (running.current === 0) setBusy(false);

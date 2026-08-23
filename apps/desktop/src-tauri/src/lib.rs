@@ -58,7 +58,23 @@ fn delete_api_key(subdomain: String) -> Result<(), String> {
 /// Reject anything that is not a single, plain filename. The directory comes
 /// from the user's own folder picker, but the filename is built from BambooHR
 /// data, so it must never be able to escape that directory.
+///
+/// The separator and drive-letter checks come BEFORE `Path::components`, whose
+/// meaning is host-specific: on Unix, `sub\dir.pdf` and `C:\Windows\evil.pdf`
+/// are each one `Normal` component and would sail straight through. A name has
+/// to be safe on every platform, not only the one that happened to write it.
 fn safe_filename(filename: &str) -> Result<&str, String> {
+    let unsafe_name = filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains(':')
+        || filename.contains('\0');
+    if unsafe_name {
+        return Err(format!("Refusing to write to an unsafe filename: {filename}"));
+    }
+
     let mut components = std::path::Path::new(filename).components();
     match (components.next(), components.next()) {
         (Some(std::path::Component::Normal(_)), None) => Ok(filename),
@@ -72,17 +88,75 @@ fn ensure_export_directory(directory: String) -> Result<(), String> {
         .map_err(|e| format!("Could not create the folder \"{directory}\": {e}"))
 }
 
+/// The names already sitting in the export folder.
+///
+/// The filename allocator only knows the names THIS export generated, so it is
+/// blind to a document that was already there. The caller reserves whatever
+/// this returns, which is what stops a certificate quietly destroying an
+/// unrelated file that happens to share its name.
+#[tauri::command]
+fn list_export_directory(directory: String) -> Result<Vec<String>, String> {
+    let dir = std::path::PathBuf::from(&directory);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Could not read the folder \"{directory}\": {e}"))?;
+
+    Ok(entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect())
+}
+
+/// Write one file into the export folder.
+///
+/// `overwrite` is false for a folder this app has not written before, and the
+/// write then uses `create_new`, which fails rather than replacing anything
+/// already present. That closes two holes at once: a certificate silently
+/// destroying an unrelated document of the same name, and a pre-existing
+/// symlink redirecting remote bytes outside the folder the user chose —
+/// `create_new` refuses an existing symlink instead of writing through it.
+///
+/// When the folder IS a previous export of ours, replacing is the intent, so
+/// the old entry is REMOVED first rather than written over. Removing unlinks a
+/// symlink; truncating would follow it.
 #[tauri::command]
 fn write_export_file(
     directory: String,
     filename: String,
     contents: Vec<u8>,
+    overwrite: bool,
 ) -> Result<(), String> {
+    use std::io::Write;
+
     let name = safe_filename(&filename)?;
     let dir = std::path::PathBuf::from(&directory);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create the folder \"{directory}\": {e}"))?;
-    std::fs::write(dir.join(name), contents)
+
+    let path = dir.join(name);
+    if overwrite {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Could not replace \"{filename}\": {e}")),
+        }
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => format!(
+                "\"{filename}\" already exists in that folder and was left untouched. \
+                 Choose an empty folder, or one this app exported to before."
+            ),
+            _ => format!("Could not write \"{filename}\": {e}"),
+        })?;
+
+    file.write_all(&contents)
         .map_err(|e| format!("Could not write \"{filename}\": {e}"))
 }
 
@@ -98,6 +172,7 @@ pub fn run() {
             load_api_key,
             delete_api_key,
             ensure_export_directory,
+            list_export_directory,
             write_export_file,
             ai::save_ai_key,
             ai::has_ai_key,
@@ -118,13 +193,18 @@ mod tests {
         assert!(safe_filename("Fire Officer 2 (2).pdf").is_ok());
     }
 
+    // Every one of these must be rejected on EVERY platform, not only the one
+    // whose path rules happen to catch it: a backslash name and a drive letter
+    // are each a single Normal component on Unix.
     #[test]
     fn rejects_anything_that_could_escape_the_chosen_folder() {
         assert!(safe_filename("../secrets.pdf").is_err());
         assert!(safe_filename("sub/dir.pdf").is_err());
         assert!(safe_filename(r"sub\dir.pdf").is_err());
         assert!(safe_filename(r"C:\Windows\evil.pdf").is_err());
+        assert!(safe_filename("C:evil.pdf").is_err());
         assert!(safe_filename("").is_err());
+        assert!(safe_filename(".").is_err());
         assert!(safe_filename("..").is_err());
     }
 }

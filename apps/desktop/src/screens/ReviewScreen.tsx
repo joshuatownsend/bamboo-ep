@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_TEMPLATE,
   FilenameAllocator,
+  applyFileNameFallback,
   MANIFEST_FILENAME,
   SUMMARY_CSV_FILENAME,
   buildFilename,
@@ -78,6 +79,19 @@ export function ReviewScreen({
   const [assignments, setAssignments] = useState<Record<string, string>>(proposed);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
 
+  /**
+   * A useState initialiser runs once, on mount. "Forget saved matches"
+   * replaces the workspace without leaving the review step, so React kept the
+   * component alive and the old assignments with it: the freshly re-matched
+   * plan was computed, displayed nowhere, and the discarded pairings were
+   * saved straight back as though the user had chosen them. Re-seeding when
+   * the plan changes is what makes that button actually forget.
+   */
+  useEffect(() => {
+    setAssignments(proposed);
+    setExcluded(new Set());
+  }, [proposed]);
+
   const filesById = useMemo(
     () => new Map(workspace.files.map((f) => [f.id, f])),
     [workspace.files],
@@ -108,6 +122,7 @@ export function ReviewScreen({
     identity,
     items: workspace.items,
     previews: pagePreviews,
+    currentFileIdOf: (itemKey) => assignments[itemKey],
   });
 
   const itemsByKey = useMemo(
@@ -195,11 +210,18 @@ export function ReviewScreen({
     [assignments, excluded, workspace.items, checks],
   );
 
-  /** A file may back only one record, so offer only what is still free. */
+  /**
+   * A file may back only one record, so offer only what is still free.
+   *
+   * An excluded row holds nothing: its assignment is ignored everywhere else,
+   * so continuing to count it as claimed made its file unofferable to any
+   * other record - and, with orphan saving off, silently dropped from the
+   * export rather than reassignable.
+   */
   const availableFilesFor = (itemKey: string) => {
     const claimed = new Set(
       Object.entries(assignments)
-        .filter(([key]) => key !== itemKey)
+        .filter(([key]) => key !== itemKey && !excluded.has(key))
         .map(([, fileId]) => fileId),
     );
     return workspace.files.filter((f) => !claimed.has(f.id));
@@ -222,15 +244,20 @@ export function ReviewScreen({
       if (!fileId) continue;
       const file = filesById.get(fileId);
       if (!file) continue;
+      // The pull renames a placeholder item after its matched file before
+      // rendering the template. Skipping that here showed "Training 12" in the
+      // preview while "Bloodborne Pathogens" was what got written - the one
+      // value on this screen the user is entitled to take literally.
+      const named = applyFileNameFallback(item, stemOf(file.originalFileName ?? file.name));
       out.set(
         item.key,
         buildFilename({
           template: settings.filenameTemplate || DEFAULT_TEMPLATE,
           values: {
-            name: item.name,
-            completed: item.completed,
-            expires: item.expires,
-            category: item.category ?? file.categoryName,
+            name: named.name,
+            completed: named.completed,
+            expires: named.expires,
+            category: named.category ?? file.categoryName,
             original: stemOf(file.originalFileName ?? file.name),
           },
           originalFileName: file.originalFileName ?? file.name,
@@ -416,6 +443,7 @@ export function ReviewScreen({
                     <select
                       value={assigned}
                       disabled={isExcluded}
+                      aria-label={`Certificate file for ${item.name}`}
                       onChange={(e) => assign(item.key, e.target.value || null)}
                     >
                       <option value="">No file</option>
@@ -478,10 +506,20 @@ export function ReviewScreen({
           <button type="button" onClick={onBack} className="secondary" disabled={busy}>
             Back
           </button>
-          <button type="button" onClick={submit} className="primary" disabled={busy}>
+          {/* `submit` snapshots the checks as they stand. Saving mid-sweep
+              would drop every result still in flight from the manifest, with
+              nothing to show that it had happened. */}
+          <button
+            type="button"
+            onClick={submit}
+            className="primary"
+            disabled={busy || checks.busy}
+          >
             {busy
               ? "Saving…"
-              : `Save ${selectedCount} record${selectedCount === 1 ? "" : "s"} (${withFileCount} with files)`}
+              : checks.busy
+                ? "Waiting for the certificate checks…"
+                : `Save ${selectedCount} record${selectedCount === 1 ? "" : "s"} (${withFileCount} with files)`}
           </button>
         </div>
       </div>

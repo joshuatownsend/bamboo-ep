@@ -18,6 +18,9 @@ interface Props {
 export function ResultScreen({ result, outputDir, onRestart }: Props) {
   const { summary } = result.manifest;
   const hasFailures = result.failures.length > 0;
+  const savedOrphanCount = result.manifest.orphanFiles.filter(
+    (f) => f.savedAs != null,
+  ).length;
 
   return (
     <div className="screen">
@@ -37,10 +40,13 @@ export function ResultScreen({ result, outputDir, onRestart }: Props) {
             <dt>Records without a file</dt>
             <dd>{summary.withoutFile}</dd>
           </div>
-          {result.manifest.orphanFiles.length > 0 && (
+          {/* An orphan whose download failed is deliberately recorded with
+              savedAs: null so the gap stays visible. Counting the array length
+              would report it as saved - the opposite of why it is there. */}
+          {savedOrphanCount > 0 && (
             <div>
               <dt>Extra files saved</dt>
-              <dd>{result.manifest.orphanFiles.length}</dd>
+              <dd>{savedOrphanCount}</dd>
             </div>
           )}
         </dl>

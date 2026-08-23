@@ -13,6 +13,9 @@ import type { Manifest } from "@bamboo-ep/core";
 
 export const SUMMARY_PDF_FILENAME = "Training Summary.pdf";
 
+/** Space kept clear at the foot of a page, in points. */
+const BOTTOM_MARGIN = 48;
+
 export function buildSummaryPdf(manifest: Manifest): Uint8Array {
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
 
@@ -58,14 +61,38 @@ export function buildSummaryPdf(manifest: Manifest): Uint8Array {
   });
 
   if (manifest.warnings.length > 0) {
-    const y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 24;
+    const notes = manifest.warnings.slice(0, 8);
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const needed = 24 + 16 + notes.length * 13 + BOTTOM_MARGIN;
+    const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable
+      .finalY;
+
+    // The notes carry the permission and download warnings - the reason a
+    // record has no certificate behind it. Written below the fold they are not
+    // merely ugly, they are absent from the printed artifact, which is the one
+    // copy the reviewer at the other end actually reads.
+    let y = finalY + 24;
+    if (finalY + needed > pageHeight) {
+      doc.addPage();
+      y = 48;
+    }
+
     doc.setFontSize(11);
+    doc.setTextColor(0);
     doc.text("Notes", 40, y);
     doc.setFontSize(9);
     doc.setTextColor(110);
-    manifest.warnings.slice(0, 8).forEach((warning, i) => {
+    notes.forEach((warning, i) => {
       doc.text(`• ${warning}`, 40, y + 16 + i * 13, { maxWidth: 740 });
     });
+    if (manifest.warnings.length > notes.length) {
+      doc.text(
+        `• …and ${manifest.warnings.length - notes.length} more, listed in manifest.json.`,
+        40,
+        y + 16 + notes.length * 13,
+        { maxWidth: 740 },
+      );
+    }
   }
 
   return new Uint8Array(doc.output("arraybuffer"));

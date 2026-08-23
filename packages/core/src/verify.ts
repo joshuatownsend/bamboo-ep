@@ -1,5 +1,5 @@
 import { comparePersonName } from "./identity.js";
-import { numericTokens, tokenOverlap } from "./matching.js";
+import { compareNumbers, tokenOverlap } from "./matching.js";
 import type { EmployeeIdentity, TrainingItem } from "./types.js";
 
 /**
@@ -301,12 +301,13 @@ function compareName(item: TrainingItem, printed: string | null): Verdict {
 
   // A level or module number is the entire difference between two otherwise
   // identical certifications, so a conflict overrides word agreement - which
-  // is precisely the failure the matcher itself was shipped with.
-  const recordNumbers = numericTokens(item.name);
-  const printedNumbers = numericTokens(printed);
-  if (recordNumbers.size > 0 && printedNumbers.size > 0) {
-    const shared = [...recordNumbers].filter((n) => printedNumbers.has(n));
-    if (shared.length === 0) return "contradicts";
+  // is precisely the failure the matcher itself was shipped with. The
+  // comparison is the matcher's, deliberately: this check had independently
+  // grown the same partial-intersection bug, where a shared standard number
+  // let a conflicting level through ("Firefighter II (NFPA 1001)" cleared by a
+  // page reading "Firefighter III (NFPA 1001)"). One function, one behaviour.
+  if (compareNumbers(item.name, [printed]).verdict === "conflict") {
+    return "contradicts";
   }
 
   const { ratio } = tokenOverlap(item.name, printed);
@@ -363,14 +364,11 @@ function betterFitFor(
     if (candidate.key === current.key) continue;
     const { ratio } = tokenOverlap(candidate.name, printed);
     if (ratio < NAME_CONFIRM_RATIO) continue;
-    // Numbers must agree for a suggestion, not merely fail to conflict; this
-    // is an assertion about the right answer, not a doubt about the current.
-    const candidateNumbers = numericTokens(candidate.name);
-    const printedNumbers = numericTokens(printed);
-    if (candidateNumbers.size > 0 && printedNumbers.size > 0) {
-      const shared = [...candidateNumbers].filter((n) => printedNumbers.has(n));
-      if (shared.length === 0) continue;
-    }
+    // Numbers must positively agree for a suggestion, not merely fail to
+    // conflict; this is an assertion about the right answer, not a doubt about
+    // the current one, and a wrong suggestion is worse than none.
+    const numbers = compareNumbers(candidate.name, [printed]);
+    if (numbers.verdict === "conflict") continue;
     if (!best || ratio > best.ratio) best = { key: candidate.key, ratio };
   }
   return best?.key ?? null;

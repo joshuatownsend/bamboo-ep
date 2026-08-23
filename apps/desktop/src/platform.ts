@@ -176,14 +176,33 @@ export async function chooseOutputDirectory(): Promise<string | null> {
  */
 export function directoryWriter(
   directory: string,
+  /**
+   * True only for a folder this app exported to before, where replacing the
+   * previous run's output is the intent. Everywhere else the write refuses to
+   * touch an existing name, so a certificate cannot destroy an unrelated
+   * document and a planted symlink cannot redirect the bytes elsewhere.
+   */
+  overwrite: boolean,
 ): (filename: string, bytes: Uint8Array) => Promise<void> {
   return async (filename, bytes) => {
     await invoke("write_export_file", {
       directory,
       filename,
       contents: Array.from(bytes),
+      overwrite,
     });
   };
+}
+
+/**
+ * What is already in the export folder.
+ *
+ * The filename allocator only knows the names the current run generated, so
+ * without this it cannot see - and will happily collide with - a file that was
+ * already sitting there.
+ */
+export function listExportDirectory(directory: string): Promise<string[]> {
+  return invoke("list_export_directory", { directory });
 }
 
 export async function ensureDirectory(directory: string): Promise<void> {

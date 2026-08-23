@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Credentials } from "@bamboo-ep/core";
 import { credentialStore } from "../platform";
 import type { Settings } from "../platform";
@@ -25,17 +25,43 @@ export function SetupScreen({ settings, busy, onConnect }: Props) {
   const [remember, setRemember] = useState(true);
   const [loadedFromKeychain, setLoadedFromKeychain] = useState(false);
 
+  /**
+   * Where the key in the field came from: nothing yet, the user's own typing,
+   * or the credential store for a named company.
+   *
+   * A key is a credential for ONE company. Carrying a loaded key across a
+   * subdomain change would send the previous company's secret to the new one
+   * and report the rejection as though the key itself were wrong.
+   */
+  const keySource = useRef<{ from: "empty" | "user" } | { from: "store"; subdomain: string }>({
+    from: "empty",
+  });
+
   useEffect(() => setSubdomain(settings.subdomain), [settings.subdomain]);
 
   // Offer the stored key back once a known subdomain is typed, so returning
   // users do not have to find their key again.
   useEffect(() => {
+    const target = subdomain.trim();
     let cancelled = false;
-    if (!subdomain.trim()) return;
+
+    const source = keySource.current;
+    if (source.from === "store" && source.subdomain !== target) {
+      keySource.current = { from: "empty" };
+      setApiKey("");
+      setLoadedFromKeychain(false);
+    }
+    if (!target) return;
+
     void credentialStore
-      .load(subdomain.trim())
+      .load(target)
       .then((stored) => {
-        if (cancelled || !stored) return;
+        // Two guards, for two different races. `cancelled` covers a subdomain
+        // changed while this lookup was in flight; `keySource` covers the user
+        // pasting a key of their own before it came back - their typing must
+        // win over a stored value arriving late.
+        if (cancelled || !stored || keySource.current.from !== "empty") return;
+        keySource.current = { from: "store", subdomain: target };
         setApiKey(stored);
         setLoadedFromKeychain(true);
       })
@@ -88,6 +114,9 @@ export function SetupScreen({ settings, busy, onConnect }: Props) {
               type="password"
               value={apiKey}
               onChange={(e) => {
+                // The user's own typing outranks a stored key that has not
+                // come back yet, so this is recorded rather than only shown.
+                keySource.current = { from: e.target.value ? "user" : "empty" };
                 setApiKey(e.target.value);
                 setLoadedFromKeychain(false);
               }}
@@ -107,7 +136,12 @@ export function SetupScreen({ settings, busy, onConnect }: Props) {
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
             />
-            <span>Remember this key on this computer</span>
+            <span>
+              Remember this key on this computer
+              {loadedFromKeychain && (
+                <small>Unticking this also removes the key already saved.</small>
+              )}
+            </span>
           </label>
 
           <button type="submit" className="primary" disabled={!canSubmit}>

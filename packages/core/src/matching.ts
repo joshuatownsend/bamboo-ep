@@ -140,34 +140,37 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
     }
   }
 
-  // A level or module number is the whole difference between two otherwise
-  // identical certifications, so a conflict here is strong evidence against
-  // the pairing - stronger than the word overlap is evidence for it.
-  const certNumbers = numericTokens(item.name);
-  // Per-field, not concatenated: the duplicate-suffix strip is anchored to the
-  // end of a filename, which a concatenation would hide.
-  const fileNumbers = new Set([
-    ...numericTokens(file.name),
-    ...numericTokens(file.originalFileName ?? ""),
-  ]);
-  if (certNumbers.size > 0 && fileNumbers.size > 0) {
-    const shared = [...certNumbers].filter((n) => fileNumbers.has(n));
-    if (shared.length > 0) {
-      score += 0.15;
-      reasons.push(`Numbers agree (${shared.slice(0, 2).join(", ")})`);
-    } else {
-      score -= 0.4;
-      reasons.push(
-        `Numbers disagree (${[...certNumbers].slice(0, 2).join(", ")} vs ` +
-          `${[...fileNumbers].slice(0, 2).join(", ")})`,
-      );
-    }
+  const numbers = compareNumbers(item.name, [file.name, file.originalFileName ?? ""]);
+  if (numbers.verdict === "agree") {
+    score += 0.15;
+    reasons.push(`Numbers agree (${numbers.shared.slice(0, 2).join(", ")})`);
   }
 
   const proximity = dateProximity(item.completed, file.dateCreated);
   if (proximity != null) {
     score += proximity.weight;
     if (proximity.weight > 0) reasons.push(proximity.reason);
+  }
+
+  // A conflicting level or standard number is disqualifying, not merely
+  // expensive. A penalty can always be outpaid by enough shared words - six
+  // matching tokens plus one wrong module number still scored above the
+  // proposal threshold - and "Module 1" against a Module 2 certificate is
+  // precisely the mislabel this scoring exists to prevent. Leaving the record
+  // unmatched for the user to assign by hand is the better failure.
+  if (numbers.verdict === "conflict") {
+    return {
+      itemKey: item.key,
+      fileId: file.id,
+      score: 0,
+      confidence: "low",
+      confirmedByUser: false,
+      reasons: [
+        `Numbers disagree (${numbers.certOnly.slice(0, 2).join(", ")} vs ` +
+          `${numbers.fileOnly.slice(0, 2).join(", ")})`,
+        ...reasons,
+      ],
+    };
   }
 
   const clamped = Math.max(0, Math.min(1, score));
@@ -222,6 +225,67 @@ export function tokenize(input: string): Set<string> {
     // made those two score identically and get assigned arbitrarily.
     .filter((t) => (t.length > 1 || /^[0-9]$/.test(t)) && !STOP_WORDS.has(t));
   return new Set(tokens);
+}
+
+export type NumberVerdict = "agree" | "conflict" | "silent";
+
+export interface NumberComparison {
+  verdict: NumberVerdict;
+  /** Numbers both sides carry. */
+  shared: string[];
+  /** Numbers only the certification names. */
+  certOnly: string[];
+  /** Numbers only the document names. */
+  fileOnly: string[];
+}
+
+/**
+ * Compare the identifying numbers on a certification against a document.
+ *
+ * A conflict requires disagreement in BOTH directions: each side must carry a
+ * number the other lacks. Requiring only that the certification's numbers all
+ * appear would be too eager - "NFPA 1001 Firefighter I" against a file called
+ * `Firefighter-1.pdf` is the same certification, with the standard number
+ * simply left off the filename, and rejecting it would break far more pairings
+ * than it saved.
+ *
+ * Sharing ONE number is not agreement either, which is the subtler half.
+ * "Firefighter II (NFPA 1001)" and "Firefighter III (NFPA 1001)" share 1001,
+ * and treating that as agreement let a shared standard number mask a
+ * conflicting level - the exact mislabel the number check exists to catch.
+ *
+ * Exported and used by the AI verification path too. The two had independently
+ * grown the same partial-intersection bug; sharing the function is what stops
+ * them diverging again.
+ */
+export function compareNumbers(
+  certName: string,
+  /**
+   * Kept as separate strings rather than one joined blob: the browser's
+   * " (1)" duplicate-download suffix is stripped only at the END of a name,
+   * and concatenating would bury it mid-string where the strip cannot see it.
+   */
+  documentNames: readonly string[],
+): NumberComparison {
+  const cert = numericTokens(certName);
+  const document = new Set(documentNames.flatMap((part) => [...numericTokens(part)]));
+
+  const shared = [...cert].filter((n) => document.has(n));
+  const certOnly = [...cert].filter((n) => !document.has(n));
+  const fileOnly = [...document].filter((n) => !cert.has(n));
+
+  if (cert.size === 0 || document.size === 0) {
+    return { verdict: "silent", shared, certOnly, fileOnly };
+  }
+  if (certOnly.length > 0 && fileOnly.length > 0) {
+    return { verdict: "conflict", shared, certOnly, fileOnly };
+  }
+  return {
+    verdict: shared.length > 0 ? "agree" : "silent",
+    shared,
+    certOnly,
+    fileOnly,
+  };
 }
 
 /**

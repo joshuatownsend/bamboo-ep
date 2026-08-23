@@ -139,6 +139,20 @@ describe("compareExtraction: the mislabels that actually happened", () => {
     expect(result.suggestedItemKey).toBe("training:2");
   });
 
+  // The verification had independently grown the matcher's partial-intersection
+  // bug: a shared standard number cleared a conflicting level, so the check
+  // meant to catch the mislabel confirmed it instead.
+  it("does not clear a different level just because the standard number matches", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "Firefighter II (NFPA 1001)" }),
+      extracted: extracted({ certificationName: "Firefighter III (NFPA 1001)" }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("contradicts");
+  });
+
   it("confirms a roman-numeral record against a digit-spelled certificate", () => {
     const result = compareExtraction({
       item: item({ key: "training:9", name: "Firefighter II (NFPA-1001)" }),

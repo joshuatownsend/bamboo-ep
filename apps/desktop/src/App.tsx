@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BambooClient,
   BambooHttp,
+  DEFAULT_TEMPLATE,
+  MANIFEST_FILENAME,
   executePull,
   gatherWorkspace,
   runProbe,
+  serializeManifest,
 } from "@bamboo-ep/core";
 import type {
   Connection,
@@ -20,6 +23,7 @@ import {
   credentialStore,
   directoryWriter,
   ensureDirectory,
+  listExportDirectory,
   loadSettings,
   platformFetch,
   saveSettings,
@@ -87,8 +91,15 @@ export default function App() {
         setConnection(probeReport.connection);
         setStep("probe");
 
-        if (remember && probeReport.connection) {
-          await credentialStore.save(credentials.subdomain, credentials.apiKey);
+        // Unticking "remember" has to REMOVE what is stored, not merely skip
+        // saving. Otherwise a key saved on an earlier run outlives the user
+        // explicitly opting out, and is offered back on the next launch.
+        if (probeReport.connection) {
+          if (remember) {
+            await credentialStore.save(credentials.subdomain, credentials.apiKey);
+          } else {
+            await credentialStore.remove(credentials.subdomain);
+          }
         }
         await persist({ ...settings, subdomain: credentials.subdomain });
       } catch (err) {
@@ -140,7 +151,14 @@ export default function App() {
 
       try {
         await ensureDirectory(directory);
-        const write = directoryWriter(directory);
+
+        // A folder holding our own manifest is a previous export, where
+        // replacing last run's output is the intent. Any other folder belongs
+        // to someone else, so every name already in it is reserved and the
+        // write itself refuses to replace anything.
+        const existing = await listExportDirectory(directory);
+        const isPriorExport = existing.includes(MANIFEST_FILENAME);
+        const write = directoryWriter(directory, isPriorExport);
 
         const pullResult = await executePull({
           client,
@@ -152,10 +170,19 @@ export default function App() {
             includeOrphanFiles: settings.includeOrphanFiles,
             verifications,
           },
-          filenameTemplate: settings.filenameTemplate,
+          // Normalised here rather than left to core's `??`, which catches
+          // only undefined: once the user cleared the format field, the empty
+          // string reached the pull while the review preview had already
+          // fallen back to the default, so the name shown was not the name
+          // written.
+          filenameTemplate: settings.filenameTemplate || DEFAULT_TEMPLATE,
           // Claimed up front so a certification named "Training Summary"
-          // cannot be allocated the name the PDF below will take.
-          reservedFilenames: [SUMMARY_PDF_FILENAME],
+          // cannot be allocated the name the PDF below will take. On a folder
+          // that is not one of our own exports, everything already in it is
+          // claimed too, so no existing document can be displaced.
+          reservedFilenames: isPriorExport
+            ? [SUMMARY_PDF_FILENAME]
+            : [SUMMARY_PDF_FILENAME, ...existing],
           appVersion: APP_VERSION,
           writeFile: write,
           onProgress: (p) =>
@@ -166,24 +193,37 @@ export default function App() {
         // it is presentation and core stays free of rendering dependencies.
         // Its failure must not erase a pull that otherwise succeeded: the
         // certificates and the manifest are already on disk by this point.
-        let pdfWarning: string | null = null;
+        let finalResult = pullResult;
         try {
           await write(SUMMARY_PDF_FILENAME, buildSummaryPdf(pullResult.manifest));
         } catch (err) {
-          pdfWarning = `The printable summary could not be created: ${messageOf(err)}. Every certificate and the spreadsheet summary were still saved.`;
+          const message = `The printable summary could not be created: ${messageOf(err)}. Every certificate and the spreadsheet summary were still saved.`;
+          const manifest = {
+            ...pullResult.manifest,
+            warnings: [...pullResult.manifest.warnings, message],
+          };
+          finalResult = {
+            ...pullResult,
+            manifest,
+            // Recorded as a failure, not only as a warning. The result screen
+            // decides "Finished" from this list, so a run that quietly claims
+            // a PDF it never wrote would otherwise look like a clean one.
+            failures: [
+              ...pullResult.failures,
+              { fileId: SUMMARY_PDF_FILENAME, label: "Printable summary", message },
+            ],
+          };
+          // executePull wrote manifest.json before this point, so the warning
+          // would otherwise live only in memory - invisible to Part 2 and to
+          // anyone reading the folder later.
+          try {
+            await write(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
+          } catch {
+            /* The manifest on disk is then simply the one without this note. */
+          }
         }
 
-        setResult(
-          pdfWarning
-            ? {
-                ...pullResult,
-                manifest: {
-                  ...pullResult.manifest,
-                  warnings: [...pullResult.manifest.warnings, pdfWarning],
-                },
-              }
-            : pullResult,
-        );
+        setResult(finalResult);
         setStep("result");
 
         // REPLACE this company's saved choices rather than merging into them.
@@ -229,14 +269,15 @@ export default function App() {
     if (!client || !connection) return;
     const subdomain = connection.credentials.subdomain;
 
-    const next: Settings = {
-      ...settings,
-      confirmedMatches: { ...settings.confirmedMatches, [subdomain]: {} },
-    };
-    await persist(next);
-
     setBusy("Re-matching your records…");
     try {
+      // Inside the try: a settings store that cannot write would otherwise
+      // reject unhandled, leaving in-memory state already changed and the
+      // error banner never shown.
+      await persist({
+        ...settings,
+        confirmedMatches: { ...settings.confirmedMatches, [subdomain]: {} },
+      });
       // Deliberately gathered with no confirmations, so every pairing is
       // scored fresh rather than inherited.
       setWorkspace(await gatherWorkspace(client, connection, { confirmed: {} }));
@@ -346,6 +387,10 @@ export default function App() {
       </section>
     </main>
   );
+}
+
+function encodeUtf8(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
 }
 
 function messageOf(err: unknown): string {

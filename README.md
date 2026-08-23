@@ -44,8 +44,27 @@ documentation — only by asking. The probe asks them:
 3. Which sources does this company actually populate — Training records, the
    `employeeCertifications` table, Employee Files, or some combination?
 
-The key is passed through the environment rather than as a flag, so it does not
-land in your shell history.
+The key is passed through the environment rather than as a flag, so it is not
+visible in the process list to other users on the machine while the probe runs.
+
+**It does still reach your shell history**, because the assignment itself is a
+command you typed. To keep it out, read the key from a prompt instead:
+
+```powershell
+# PowerShell — the key is never typed as part of a command
+$env:BAMBOO_API_KEY = (Read-Host "BambooHR API key" -AsSecureString |
+  ConvertFrom-SecureString -AsPlainText)
+```
+
+```bash
+# bash/zsh — -s hides the typing, and the leading space keeps the read itself
+# out of history where HISTCONTROL=ignorespace is set
+ read -rs -p "BambooHR API key: " BAMBOO_API_KEY && export BAMBOO_API_KEY
+```
+
+Clear it when you are done: `$env:BAMBOO_API_KEY = $null`, or `unset
+BAMBOO_API_KEY`. The desktop app never has this problem — it stores the key in
+the OS credential store and no shell is involved.
 
 **PowerShell** (note: `VAR=value cmd` is bash-only and fails here):
 
@@ -168,14 +187,18 @@ asking every employee to invent a second secret in order to store the first.
 
 ```bash
 pnpm install
-pnpm test        # 81 unit tests in packages/core
+pnpm test        # 136 unit tests in packages/core
 pnpm typecheck
 ```
+
+There are 8 further tests on the Rust side (`cd apps/desktop/src-tauri && cargo
+test`), covering the filename guard and the AI client's destination rule.
 
 Tests cover the parts with rules worth pinning down: Windows filename sanitisation
 (reserved device names, trailing dots, case-insensitive collisions), template
 rendering, BambooHR's object-map-vs-empty-array response inconsistency, month
-arithmetic for derived expiry, the match scorer, and retry behaviour.
+arithmetic for derived expiry, the match scorer, retry behaviour, fuzzy person-name
+matching, and the tolerance of whatever shape a model returns its answer in.
 
 One retry rule is worth calling out because it is inverted from most APIs:
 
