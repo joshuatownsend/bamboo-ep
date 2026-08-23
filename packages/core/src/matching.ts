@@ -135,7 +135,17 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
   if (overlap.ratio > 0) {
     // Name similarity is the strongest available signal, so it dominates.
     score += overlap.ratio * 0.7;
-    reasons.push(`File name shares "${overlap.shared.slice(0, 3).join('", "')}"`);
+    // The MISSING words are named too. A score of "medium" with only the
+    // matching words listed is unexplainable from the screen - the reviewer
+    // cannot tell whether the shortfall is one stray word or half the name,
+    // and during a live run that sent them to the document check for an
+    // answer the file-name row should have given them itself.
+    reasons.push(
+      overlap.missing.length === 0
+        ? `File name has every word of "${item.name}"`
+        : `File name shares "${overlap.shared.slice(0, 3).join('", "')}" ` +
+            `but not "${overlap.missing.slice(0, 3).join('", "')}"`,
+    );
   }
 
   for (const hint of CATEGORY_HINTS) {
@@ -209,13 +219,14 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
 export function tokenOverlap(
   certName: string,
   fileName: string,
-): { ratio: number; shared: string[] } {
+): { ratio: number; shared: string[]; missing: string[] } {
   const certTokens = tokenize(certName);
-  if (certTokens.size === 0) return { ratio: 0, shared: [] };
+  if (certTokens.size === 0) return { ratio: 0, shared: [], missing: [] };
   const fileTokens = tokenize(fileName);
 
   const shared = [...certTokens].filter((t) => fileTokens.has(t));
-  return { ratio: shared.length / certTokens.size, shared };
+  const missing = [...certTokens].filter((t) => !fileTokens.has(t));
+  return { ratio: shared.length / certTokens.size, shared, missing };
 }
 
 /**

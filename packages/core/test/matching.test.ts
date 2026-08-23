@@ -142,6 +142,30 @@ describe("buildMatchPlan: real-world module swap", () => {
   });
 });
 
+describe("scorePair: the reason explains the shortfall", () => {
+  // A "medium" score showing only the words that DID match is unexplainable
+  // from the screen: the reviewer cannot tell a single stray word from half a
+  // missing name, and in a live run that sent them to the AI verdict to find
+  // out something the file-name row should have told them.
+  it("names the words the file is missing", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "HAZMAT Awareness Operations Refresher" }),
+      file({ id: "9", name: "hazmat awareness operations", originalFileName: "h.pdf" }),
+    );
+
+    expect(result.reasons[0]).toMatch(/but not "refresher"/);
+  });
+
+  it("says so plainly when nothing is missing", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "HAZMAT Awareness Operations" }),
+      file({ id: "9", name: "hazmat awareness operations", originalFileName: "h.pdf" }),
+    );
+
+    expect(result.reasons[0]).toMatch(/every word/);
+  });
+});
+
 describe("tokenOverlap", () => {
   it("measures against the certification, not the file, so noisy filenames are not penalised", () => {
     const result = tokenOverlap(
