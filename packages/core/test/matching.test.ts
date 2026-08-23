@@ -286,6 +286,42 @@ describe("buildMatchPlan: positional keys are not identity", () => {
   });
 });
 
+describe("scorePair: a complete name match is high confidence", () => {
+  // From a real export. Certificates were earned in 2016 and uploaded to
+  // BambooHR years later in one batch, so the "uploaded years apart" penalty
+  // fired on nearly every file - and name agreement alone scores exactly the
+  // high threshold, so that penalty was enough to demote all of them.
+  it("is not demoted by a file uploaded years after the training", () => {
+    const result = scorePair(
+      item({
+        key: "training:1",
+        name: "HAZMAT Awareness & Operations",
+        completed: "2016-02-20",
+      }),
+      file({
+        id: "9",
+        name: "[SWP] HAZMAT Awareness & Operations",
+        originalFileName: "SWP-HAZMAT-Awareness-Operations.pdf",
+        categoryName: "Uncategorised",
+        dateCreated: "2024-11-02",
+      }),
+    );
+
+    expect(result.confidence).toBe("high");
+  });
+
+  // The floor is evidence of a name, not an override of a contradiction.
+  it("does not rescue a pairing whose numbers disagree", () => {
+    const result = scorePair(
+      item({ key: "training:1", name: "Rescue Module 1" }),
+      file({ id: "9", name: "Rescue Module 2", originalFileName: "rescue-module-2.pdf" }),
+    );
+
+    expect(result.confidence).toBe("low");
+    expect(result.score).toBe(0);
+  });
+});
+
 describe("compareNumbers", () => {
   // A shared standard number used to mask a conflicting level, so the wrong
   // rung of a certification ladder scored as agreement.

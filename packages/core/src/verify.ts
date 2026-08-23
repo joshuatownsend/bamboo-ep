@@ -25,6 +25,22 @@ export interface ExtractedCertificate {
   expirationDate: string | null;
   /** The name of the person the certificate was issued to. */
   personName: string | null;
+  /**
+   * Every other certification, course or credential named anywhere on the
+   * page.
+   *
+   * Certificates put the awarding body, a ceremonial heading and the actual
+   * qualification in three different places, in whatever typographic order
+   * they like. Asking the model to pick THE title makes it guess at which of
+   * those the reader cares about - and on a real export it kept choosing the
+   * letterhead, answering "Commendation of Original Virginia Department of
+   * Fire Programs" for a Hazardous Materials certificate.
+   *
+   * So it is no longer asked to choose. It lists what the page says, and the
+   * comparison below decides which phrase matters - which is the same division
+   * of labour as the rest of this module: the model reports, local code rules.
+   */
+  alsoMentioned: string[];
   documentType: DocumentType;
   /** False when the page is too poor a scan to read with any confidence. */
   legible: boolean;
@@ -105,11 +121,15 @@ Fields:
 - issuedDate: the date it was earned, completed, or issued (YYYY-MM-DD).
 - expirationDate: the expiry or renewal date if one is printed (YYYY-MM-DD).
 - personName: the name of the person it was issued to, exactly as printed.
+- alsoMentioned: an array of EVERY other certification, course, qualification
+  or credential named anywhere on the page, each exactly as printed. Include
+  headings, body text, seals and small print. If the page names only one, this
+  is an empty array. Do not include the name of the issuing organisation.
 - documentType: one of certificate, card, transcript, other, unreadable.
 - legible: false if the scan is too poor to read with confidence.
 
 If a date shows only a month and year, use the first day of that month.
-Return a single JSON object with exactly these six keys and nothing else.`;
+Return a single JSON object with exactly these seven keys and nothing else.`;
 
 /** JSON Schema for endpoints that support structured output. */
 export const EXTRACTION_JSON_SCHEMA = {
@@ -120,6 +140,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "issuedDate",
     "expirationDate",
     "personName",
+    "alsoMentioned",
     "documentType",
     "legible",
   ],
@@ -128,6 +149,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     issuedDate: { type: ["string", "null"] },
     expirationDate: { type: ["string", "null"] },
     personName: { type: ["string", "null"] },
+    alsoMentioned: { type: "array", items: { type: "string" } },
     documentType: { type: "string", enum: DOCUMENT_TYPES },
     legible: { type: "boolean" },
   },
@@ -207,6 +229,14 @@ export function parseExtraction(
       issuedDate: cleanIsoDate(row.issuedDate),
       expirationDate: cleanIsoDate(row.expirationDate),
       personName: cleanText(row.personName),
+      // Tolerated as absent rather than required: this field was added after
+      // the first release of the prompt, and a model that omits it is still
+      // giving a usable answer - just a narrower one.
+      alsoMentioned: Array.isArray(row.alsoMentioned)
+        ? row.alsoMentioned
+            .map((value) => cleanText(value))
+            .filter((value): value is string => value != null)
+        : [],
       documentType,
       legible: row.legible && documentType !== "unreadable",
     },
@@ -320,7 +350,11 @@ export function compareExtraction(input: CompareInput): CompareResult {
     };
   }
 
-  const name = compareName(item, extracted.certificationName);
+  // Judged against the best phrase the page offered, not whichever one the
+  // model happened to lead with.
+  const candidates = candidateNames(extracted);
+  const best = bestNameMatch(item.name, candidates);
+  const name = compareName(item, best?.printed ?? extracted.certificationName);
   const date = compareDates(item, extracted);
   const person = comparePerson(extracted.personName, identity);
 
@@ -328,7 +362,7 @@ export function compareExtraction(input: CompareInput): CompareResult {
     verdicts: { name, date, person },
     suggestedItemKey:
       name === "contradicts"
-        ? betterFitFor(extracted.certificationName, item, allItems)
+        ? betterFitFor(candidates, item, allItems)
         : null,
   };
 }
@@ -355,6 +389,31 @@ export function corePart(name: string): string {
     .trim();
   // If the qualifier WAS the name, there is nothing to demote.
   return stripped ? stripped : name;
+}
+
+/**
+ * Every phrase on the page that might be the credential, best first.
+ *
+ * The model's chosen `certificationName` is only one candidate among them.
+ */
+function candidateNames(extracted: ExtractedCertificate): string[] {
+  const mentioned = Array.isArray(extracted.alsoMentioned) ? extracted.alsoMentioned : [];
+  return [extracted.certificationName, ...mentioned].filter(
+    (value): value is string => value != null && value.trim() !== "",
+  );
+}
+
+/** The phrase on the page that best matches this record, and how well. */
+export function bestNameMatch(
+  recordName: string,
+  candidates: readonly string[],
+): { printed: string; ratio: number } | null {
+  let best: { printed: string; ratio: number } | null = null;
+  for (const printed of candidates) {
+    const { ratio } = tokenOverlap(corePart(recordName), printed);
+    if (!best || ratio > best.ratio) best = { printed, ratio };
+  }
+  return best;
 }
 
 function compareName(item: TrainingItem, printed: string | null): Verdict {
@@ -419,16 +478,18 @@ function comparePerson(printed: string | null, identity: EmployeeIdentity | null
  * user than flagging the wrong one, because it turns a puzzle into a click.
  */
 function betterFitFor(
-  printed: string | null,
+  printedNames: readonly string[],
   current: TrainingItem,
   allItems: readonly TrainingItem[],
 ): string | null {
-  if (!printed) return null;
+  if (printedNames.length === 0) return null;
 
   let best: { key: string; ratio: number } | null = null;
   for (const candidate of allItems) {
     if (candidate.key === current.key) continue;
-    const { ratio } = tokenOverlap(corePart(candidate.name), printed);
+    const match = bestNameMatch(candidate.name, printedNames);
+    const ratio = match?.ratio ?? 0;
+    const printed = match?.printed ?? "";
     if (ratio < NAME_CONFIRM_RATIO) continue;
     // Numbers must positively agree for a suggestion, not merely fail to
     // conflict; this is an assertion about the right answer, not a doubt about

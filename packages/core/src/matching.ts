@@ -180,7 +180,17 @@ export function scorePair(item: TrainingItem, file: EmployeeFile): Match {
     };
   }
 
-  const clamped = Math.max(0, Math.min(1, score));
+  // A filename containing EVERY word of the certification's name is the
+  // strongest evidence this scorer can see, and it must not be talked out of
+  // that by a weak corroborating signal. Name agreement alone scores exactly
+  // 0.7 - the high-confidence threshold - so the "uploaded years apart"
+  // penalty was enough to demote it. Certificates are routinely uploaded in
+  // one batch long after they were earned, so that penalty fired on an entire
+  // real export and reported every perfectly-named file as merely medium.
+  // A number conflict has already returned above, so reaching here means the
+  // numbers did not contradict.
+  const perfectName = overlap.ratio === 1;
+  const clamped = Math.max(perfectName ? 0.7 : 0, Math.min(1, score));
   return {
     itemKey: item.key,
     fileId: file.id,

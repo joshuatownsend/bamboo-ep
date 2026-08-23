@@ -490,9 +490,12 @@ export function ReviewScreen({
                     )}
                     {match && assigned === match.fileId && (
                       <div className={`sub confidence-${match.confidence}`}>
+                        {/* Labelled as the file-name match, because it sits
+                            directly above the document check and was read as
+                            the AI's verdict during a live run. */}
                         {match.confirmedByUser
                           ? "Your earlier choice"
-                          : `${match.confidence} confidence — ${match.reasons[0] ?? "weak signal"}`}
+                          : `File name: ${match.confidence} confidence — ${match.reasons[0] ?? "weak signal"}`}
                       </div>
                     )}
 

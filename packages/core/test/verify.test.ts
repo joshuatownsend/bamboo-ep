@@ -38,6 +38,7 @@ function extracted(partial: Partial<ExtractedCertificate> = {}): ExtractedCertif
     issuedDate: null,
     expirationDate: null,
     personName: null,
+    alsoMentioned: [],
     documentType: "certificate",
     legible: true,
     ...partial,
@@ -258,6 +259,64 @@ describe("compareExtraction: catalogue references", () => {
 
   it("leaves a name that is only a qualifier alone", () => {
     expect(corePart("(NFPA-1001)")).toBe("(NFPA-1001)");
+  });
+});
+
+describe("compareExtraction: the credential is not always the heading", () => {
+  // Verbatim from a live run. The model was asked to name THE certification
+  // and chose the letterhead, answering "Commendation of Original Virginia
+  // Department of Fire Programs Virginia Fire Services Board" for a Hazardous
+  // Materials certificate. It is no longer asked to choose: it lists what the
+  // page says and this code picks the phrase that matters.
+  it("finds the credential among the other phrases on the page", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "HAZMAT Awareness & Operations" }),
+      extracted: extracted({
+        certificationName:
+          "Commendation of Original Virginia Department of Fire Programs Virginia Fire Services Board",
+        alsoMentioned: ["Hazardous Materials Awareness & Operations"],
+      }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("confirms");
+  });
+
+  // The extra phrases must not become a way to match anything at all: a page
+  // listing many credentials still has to disagree when none of them is this
+  // record's.
+  it("still contradicts when none of the phrases is this record's", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "HAZMAT Awareness & Operations" }),
+      extracted: extracted({
+        certificationName: "Certificate of Commendation",
+        alsoMentioned: ["Cardiopulmonary Resuscitation", "Basic Life Support"],
+      }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("contradicts");
+  });
+
+  it("names the better-fitting record from any phrase on the page", () => {
+    const items = [
+      item({ key: "training:1", name: "HAZMAT Awareness & Operations" }),
+      item({ key: "training:2", name: "CPR BLS Provider" }),
+    ];
+    const result = compareExtraction({
+      item: items[0]!,
+      extracted: extracted({
+        certificationName: "Certificate of Achievement",
+        alsoMentioned: ["CPR BLS Provider"],
+      }),
+      identity: me,
+      allItems: items,
+    });
+
+    expect(result.verdicts.name).toBe("contradicts");
+    expect(result.suggestedItemKey).toBe("training:2");
   });
 });
 
