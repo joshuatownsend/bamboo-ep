@@ -329,6 +329,11 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     ...verificationWarnings,
   ];
 
+  // The summaries are part of what this export produced, so they belong in
+  // `outputs` alongside the certificates. The manifest names itself too: a
+  // later run must be able to recognise it as ours.
+  const outputs = [...filesWritten, SUMMARY_CSV_FILENAME, MANIFEST_FILENAME];
+
   const manifest = buildManifest({
     appVersion,
     generatedAt: now().toISOString(),
@@ -339,6 +344,7 @@ export async function executePull(options: PullOptions): Promise<PullResult> {
     entries,
     orphanFiles: orphanRecords,
     orphanFileCount: workspace.files.filter((f) => !pairedFileIds.has(f.id)).length,
+    outputs,
     warnings,
   });
 

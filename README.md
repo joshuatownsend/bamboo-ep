@@ -187,7 +187,7 @@ asking every employee to invent a second secret in order to store the first.
 
 ```bash
 pnpm install
-pnpm test        # 143 unit tests in packages/core
+pnpm test        # 145 unit tests in packages/core
 pnpm typecheck
 ```
 

@@ -157,8 +157,24 @@ export default function App() {
     ) => {
       if (!client || !connection || !workspace) return;
 
-      const directory = settings.outputDir ?? (await chooseOutputDirectory());
-      if (!directory) return;
+      // Picking the folder here rather than on the review screen means the
+      // filenames the user just read were allocated against no folder at all.
+      // If the chosen one already holds a colliding name, the export would
+      // quietly add a suffix to something they were shown without it. So the
+      // choice is taken, the preview updated, and the save left for them to
+      // confirm - the "Will be saved as" column is a promise, and this is the
+      // one path that could have broken it silently.
+      if (!settings.outputDir) {
+        const chosen = await chooseOutputDirectory();
+        if (!chosen) return;
+        await persist({ ...settings, outputDir: chosen });
+        setExportPlan(await planExportInto(chosen, connection));
+        setError(
+          `Saving to ${chosen}. Check the file names below, then press Save again.`,
+        );
+        return;
+      }
+      const directory = settings.outputDir;
 
       setError(null);
       setBusy("Downloading…");
@@ -228,9 +244,21 @@ export default function App() {
         // it is presentation and core stays free of rendering dependencies.
         // Its failure must not erase a pull that otherwise succeeded: the
         // certificates and the manifest are already on disk by this point.
+        // Always rewritten after the printable summary is attempted, so
+        // `outputs` names what this export ACTUALLY produced - including
+        // whether the PDF made it. That record is what lets the next run
+        // replace its own files without ever touching one of the user's.
+        const replace = directoryWriter(directory, true);
+
         let finalResult = pullResult;
         try {
           await write(SUMMARY_PDF_FILENAME, buildSummaryPdf(pullResult.manifest));
+          const manifest = {
+            ...pullResult.manifest,
+            outputs: [...pullResult.manifest.outputs, SUMMARY_PDF_FILENAME],
+          };
+          finalResult = { ...pullResult, manifest };
+          await replace(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
         } catch (err) {
           const message = `The printable summary could not be created: ${messageOf(err)}. Every certificate and the spreadsheet summary were still saved.`;
           const manifest = {
@@ -258,7 +286,6 @@ export default function App() {
           // after writing it, is the one case where overwriting is
           // unambiguously right.
           try {
-            const replace = directoryWriter(directory, true);
             await replace(MANIFEST_FILENAME, encodeUtf8(serializeManifest(manifest)));
           } catch {
             /* The manifest on disk is then simply the one without this note. */
@@ -546,16 +573,28 @@ async function readPriorManifest(
   return sameEmployee ? manifest : null;
 }
 
-/** Every filename a previous run of this app put in the folder. */
+/**
+ * Every filename a previous run of this app put in the folder.
+ *
+ * Read from the manifest's own record of what it wrote. The earlier version
+ * derived this, and assumed the two summaries and the manifest were always
+ * present - but the printable summary is written AFTER the manifest and can
+ * fail, so a folder could be missing it. A user who then put their own
+ * "Training Summary.pdf" there would have had it replaced by the next export,
+ * on the strength of a file we had merely assumed we once wrote.
+ *
+ * The manifest and the CSV are still claimed unconditionally: executePull
+ * writes both before the manifest exists at all, so a manifest being there is
+ * proof they were produced.
+ */
 function outputsOf(manifest: Manifest): Set<string> {
-  const names = new Set<string>([
-    MANIFEST_FILENAME,
-    SUMMARY_CSV_FILENAME,
-    SUMMARY_PDF_FILENAME,
-  ]);
-  // Every `savedAs` is type-checked rather than trusted: a name that is not a
-  // string would otherwise be added as one and quietly mark some real file as
-  // ours - the same over-claiming this function exists to prevent.
+  const names = new Set<string>([MANIFEST_FILENAME, SUMMARY_CSV_FILENAME]);
+  // Type-checked rather than trusted: a name that is not a string would
+  // otherwise be added as one and quietly mark some real file as ours - the
+  // same over-claiming this function exists to prevent.
+  for (const name of Array.isArray(manifest.outputs) ? manifest.outputs : []) {
+    if (typeof name === "string") names.add(name);
+  }
   for (const entry of manifest.entries) {
     if (typeof entry?.file?.savedAs === "string") names.add(entry.file.savedAs);
   }

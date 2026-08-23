@@ -56,6 +56,17 @@ export interface Manifest {
      */
     contradicted: number;
   };
+  /**
+   * Every filename this export wrote into the folder.
+   *
+   * Recorded rather than inferred. A later run has to know which files are
+   * ITS OWN before it may replace any of them, and deriving that from the
+   * entries misses the summaries and - worse - claims files that were never
+   * actually produced, because a summary can fail after the manifest is
+   * already on disk. Guessing in that direction destroys the user's data;
+   * recording it cannot.
+   */
+  outputs: string[];
   /** Non-fatal problems worth showing before an upload is attempted. */
   warnings: string[];
 }
@@ -122,6 +133,8 @@ export function buildManifest(args: {
   entries: ManifestEntry[];
   orphanFiles: OrphanFile[];
   orphanFileCount: number;
+  /** Filenames written so far. The caller adds anything it writes afterwards. */
+  outputs?: readonly string[];
   warnings?: string[];
 }): Manifest {
   const withFile = args.entries.filter((e) => e.file != null).length;
@@ -160,6 +173,7 @@ export function buildManifest(args: {
       contradicted,
       verificationFailed,
     },
+    outputs: [...(args.outputs ?? [])],
     warnings: args.warnings ?? [],
   };
 }

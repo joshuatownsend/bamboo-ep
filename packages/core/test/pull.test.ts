@@ -372,6 +372,46 @@ describe("runPool", () => {
   });
 });
 
+describe("executePull: what the export produced", () => {
+  // Ownership of a file is recorded, never inferred. A later run consults this
+  // to decide what it may replace, and guessing in that direction destroys the
+  // user's own files - so the record has to name exactly what was written.
+  it("records every file it wrote, including the summary and itself", async () => {
+    const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+    const files = [file({ id: "100", name: "cpr" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.outputs).toContain("CPR BLS - 2025-06-01.pdf");
+    expect(manifest.outputs).toContain(SUMMARY_CSV_FILENAME);
+    expect(manifest.outputs).toContain(MANIFEST_FILENAME);
+  });
+
+  it("does not claim a certificate whose download failed", async () => {
+    const items = [item({ key: "training:1", name: "CPR BLS", completed: "2025-06-01" })];
+    const files = [file({ id: "100", name: "cpr" })];
+    const fs = memoryFs();
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient({ failIds: ["100"] }),
+      workspace: workspaceOf(items, files),
+      decisions: { confirmed: { "100": "training:1" } },
+      writeFile: fs.writeFile,
+    });
+
+    expect(readManifest(fs).outputs).not.toContain("CPR BLS - 2025-06-01.pdf");
+  });
+});
+
 describe("executePull: filename collisions", () => {
   // The review screen allocates in record order. Confirmations are keyed by
   // file id, and walking THOSE gave numeric-key order - so the row promised
