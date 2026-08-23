@@ -68,6 +68,25 @@ describe("comparePersonName", () => {
     expect(comparePersonName("Josh Townsend", me)).toBe("same");
   });
 
+  // From a live run: BambooHR held "Josh Townsend" while every certificate was
+  // printed "TOWNSEND JOSHUA RUSSELL", so only the surname matched and the
+  // person check answered "inconclusive" for every certificate in the export.
+  it("matches a short first name against the full one on the certificate", () => {
+    const shortForm = { ...me, firstName: "Josh", displayName: "Josh Townsend" };
+    expect(comparePersonName("TOWNSEND JOSHUA RUSSELL", shortForm)).toBe("same");
+  });
+
+  it("does not let two spellings of one first name stand in for a surname", () => {
+    const shortForm = { ...me, firstName: "Josh", displayName: "Josh Townsend" };
+    expect(comparePersonName("JOSH JOSHUA DELGADO", shortForm)).toBe("unknown");
+  });
+
+  it("keeps unrelated short names apart", () => {
+    expect(comparePersonName("Mark Delgado", { ...me, firstName: "Maria" })).toBe(
+      "different",
+    );
+  });
+
   it("calls an unrelated name different", () => {
     expect(comparePersonName("Maria Delgado", me)).toBe("different");
   });

@@ -62,6 +62,27 @@ export function splitName(value: string): string[] {
     .filter((part) => part.length > 1 && !NAME_NOISE.has(part));
 }
 
+/**
+ * Is this the same name word, allowing for the short form?
+ *
+ * From a live run: BambooHR held "Josh Townsend" while every certificate was
+ * printed "TOWNSEND JOSHUA RUSSELL". Comparing whole words exactly matched
+ * only the surname, one shared word is deliberately ruled ambiguous, and so
+ * the person check returned "inconclusive" for every single certificate - the
+ * check was on, and silently answering nothing.
+ *
+ * A prefix is the shape most short forms take (Josh/Joshua, Ben/Benjamin,
+ * Chris/Christopher). Three characters is the floor: shorter, and unrelated
+ * names start colliding. It does not catch every nickname - Bill/William,
+ * Peggy/Margaret - and it is not meant to; those simply stay inconclusive,
+ * which is the honest answer rather than a wrong one.
+ */
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 3 && long.startsWith(short);
+}
+
 export type PersonMatch = "same" | "different" | "unknown";
 
 /**
@@ -84,7 +105,17 @@ export function comparePersonName(
   const found = new Set(splitName(printed));
   if (found.size === 0) return "unknown";
 
-  const shared = [...found].filter((word) => known.has(word));
+  // Counted by how many of the KNOWN words were matched, not how many printed
+  // words matched something: a page printing both "Josh" and "Joshua" must not
+  // score two hits against one first name.
+  const matched = new Set<string>();
+  for (const word of found) {
+    for (const candidate of known) {
+      if (sameWord(word, candidate)) matched.add(candidate);
+    }
+  }
+
+  const shared = [...matched];
   if (shared.length >= 2) return "same";
 
   // A single shared word is genuinely ambiguous: two colleagues named Smith
