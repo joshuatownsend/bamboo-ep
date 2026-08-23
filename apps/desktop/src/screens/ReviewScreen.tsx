@@ -58,6 +58,14 @@ interface Props {
   ) => Promise<{ bytes: Uint8Array; contentType: string | null }>;
   /** The employee whose profile this is, for the "right person?" check. */
   identity: EmployeeIdentity | null;
+  /**
+   * Names already spoken for in the output folder. The preview allocates
+   * against these so the filename shown is the filename written, including
+   * the collision suffix.
+   */
+  reservedFilenames: readonly string[];
+  /** Lets the reservations be recomputed when a new folder is picked. */
+  onOutputDirChosen: (directory: string) => void;
 }
 
 export function ReviewScreen({
@@ -70,6 +78,8 @@ export function ReviewScreen({
   onBack,
   loadFileBytes,
   identity,
+  reservedFilenames,
+  onOutputDirChosen,
 }: Props) {
   // itemKey -> fileId. Seeded from the proposed plan, then edited freely.
   const proposed = useMemo(
@@ -244,6 +254,7 @@ export function ReviewScreen({
       MANIFEST_FILENAME,
       SUMMARY_CSV_FILENAME,
       SUMMARY_PDF_FILENAME,
+      ...reservedFilenames,
     ]);
     const out = new Map<string, string>();
     for (const item of workspace.items) {
@@ -274,7 +285,14 @@ export function ReviewScreen({
       );
     }
     return out;
-  }, [assignments, excluded, filesById, settings.filenameTemplate, workspace.items]);
+  }, [
+    assignments,
+    excluded,
+    filesById,
+    reservedFilenames,
+    settings.filenameTemplate,
+    workspace.items,
+  ]);
 
   const selectedCount = workspace.items.filter((i) => !excluded.has(i.key)).length;
   const withFileCount = savedAsPreviews.size;
@@ -575,7 +593,9 @@ export function ReviewScreen({
             className="secondary full"
             onClick={async () => {
               const dir = await chooseOutputDirectory();
-              if (dir) onSettingsChange({ ...settings, outputDir: dir });
+              if (!dir) return;
+              onSettingsChange({ ...settings, outputDir: dir });
+              onOutputDirChosen(dir);
             }}
           >
             {settings.outputDir ?? "Choose a folder…"}

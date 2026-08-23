@@ -4,6 +4,7 @@ import {
   BambooHttp,
   DEFAULT_TEMPLATE,
   MANIFEST_FILENAME,
+  SUMMARY_CSV_FILENAME,
   executePull,
   gatherWorkspace,
   parseManifest,
@@ -13,6 +14,7 @@ import {
 import type {
   Connection,
   Credentials,
+  Manifest,
   ProbeReport,
   PullResult,
   Verification,
@@ -59,6 +61,13 @@ export default function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [result, setResult] = useState<PullResult | null>(null);
+  /**
+   * Held in state so the review screen's "Will be saved as" column allocates
+   * against the same reservations the pull will. Without it the preview
+   * promised `CPR.pdf` while the export wrote `CPR (2).pdf` - wrong precisely
+   * when the collision protection did something.
+   */
+  const [exportPlan, setExportPlan] = useState<ExportPlan>(EMPTY_PLAN);
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(
     null,
   );
@@ -122,13 +131,16 @@ export default function App() {
       const confirmed = settings.confirmedMatches[connection.credentials.subdomain] ?? {};
       const gathered = await gatherWorkspace(client, connection, { confirmed });
       setWorkspace(gathered);
+      setExportPlan(
+        settings.outputDir ? await planExportInto(settings.outputDir, connection) : EMPTY_PLAN,
+      );
       setStep("review");
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(null);
     }
-  }, [client, connection, settings.confirmedMatches]);
+  }, [client, connection, settings.confirmedMatches, settings.outputDir]);
 
   /**
    * Step 3: download. Only reached after the user has confirmed the pairings,
@@ -154,16 +166,11 @@ export default function App() {
       try {
         await ensureDirectory(directory);
 
-        // Replacing is allowed only where the folder holds a previous export
-        // OF THIS EMPLOYEE. The presence of a manifest is not enough on its
-        // own: settings keep a single remembered outputDir while credentials
-        // and matches both support several companies, so exporting a second
-        // employee into the same folder would otherwise delete the first
-        // one's certificates without a word. The manifest already records the
-        // subdomain and employee id, so it is read rather than merely counted.
-        const existing = await listExportDirectory(directory);
-        const isPriorExport = await folderBelongsTo(directory, existing, connection);
-        const write = directoryWriter(directory, isPriorExport);
+        // Recomputed here rather than reused from the review screen: the
+        // folder may only have been chosen a moment ago, and its contents can
+        // have changed while the user was reviewing.
+        const plan = await planExportInto(directory, connection);
+        const write = directoryWriter(directory, plan.overwrite);
 
         const pullResult = await executePull({
           client,
@@ -182,12 +189,9 @@ export default function App() {
           // written.
           filenameTemplate: settings.filenameTemplate || DEFAULT_TEMPLATE,
           // Claimed up front so a certification named "Training Summary"
-          // cannot be allocated the name the PDF below will take. On a folder
-          // that is not one of our own exports, everything already in it is
-          // claimed too, so no existing document can be displaced.
-          reservedFilenames: isPriorExport
-            ? [SUMMARY_PDF_FILENAME]
-            : [SUMMARY_PDF_FILENAME, ...existing],
+          // cannot be allocated the name the PDF below will take, plus
+          // whatever in the folder belongs to someone other than this export.
+          reservedFilenames: [SUMMARY_PDF_FILENAME, ...plan.reserved],
           appVersion: APP_VERSION,
           writeFile: write,
           onProgress: (p) =>
@@ -379,6 +383,10 @@ export default function App() {
             onBack={() => setStep("probe")}
             loadFileBytes={loadFileBytes}
             identity={connection?.employee ?? null}
+            reservedFilenames={exportPlan.reserved}
+            onOutputDirChosen={async (directory) => {
+              if (connection) setExportPlan(await planExportInto(directory, connection));
+            }}
           />
         )}
 
@@ -394,30 +402,85 @@ export default function App() {
   );
 }
 
-/**
- * Is this folder a previous export of the same employee's records?
- *
- * Anything else - another employee, another company, an unreadable or
- * hand-edited manifest, no manifest at all - is treated as someone else's
- * folder, whose contents are then reserved rather than replaced.
- */
-async function folderBelongsTo(
-  directory: string,
-  existing: readonly string[],
-  connection: Connection,
-): Promise<boolean> {
-  if (!existing.includes(MANIFEST_FILENAME)) return false;
+/** What may be replaced in the chosen folder, and what may not. */
+export interface ExportPlan {
+  /** Names the allocator must not hand out, because something else owns them. */
+  reserved: string[];
+  /** Whether a generated name may replace a file already at that path. */
+  overwrite: boolean;
+}
 
+const EMPTY_PLAN: ExportPlan = { reserved: [], overwrite: false };
+
+/**
+ * Work out what is safe to write over in a folder.
+ *
+ * Two separate questions, and conflating them was the bug. Whether the folder
+ * is a previous export of THIS employee decides whether replacing is the
+ * intent at all. But even then, ownership of the folder is not ownership of
+ * everything in it: a document the user dropped in afterwards is theirs, and a
+ * certificate must not be allowed to take its name. So the prior manifest is
+ * read for the list of files it actually produced, and anything present but
+ * unaccounted for is reserved.
+ */
+async function planExportInto(
+  directory: string,
+  connection: Connection,
+): Promise<ExportPlan> {
+  const existing = await listExportDirectory(directory).catch((): string[] => []);
+  if (existing.length === 0) return EMPTY_PLAN;
+
+  const prior = existing.includes(MANIFEST_FILENAME)
+    ? await readPriorManifest(directory, connection)
+    : null;
+
+  // Not ours: nothing here may be touched, so every name is claimed.
+  if (!prior) return { reserved: existing, overwrite: false };
+
+  const ours = outputsOf(prior);
+  return {
+    reserved: existing.filter((name) => !ours.has(name)),
+    overwrite: true,
+  };
+}
+
+/**
+ * The prior manifest, but only if it describes this same employee. Another
+ * employee's export, an unreadable file, or one edited by hand all mean "treat
+ * this as someone else's folder" - settings remember a single output folder
+ * while credentials and matches both support several companies, so a second
+ * employee exporting here is an ordinary thing to do, not an odd one.
+ */
+async function readPriorManifest(
+  directory: string,
+  connection: Connection,
+): Promise<Manifest | null> {
   const text = await readExportFile(directory, MANIFEST_FILENAME).catch(() => null);
-  if (!text) return false;
+  if (!text) return null;
 
   const parsed = parseManifest(text);
-  if ("error" in parsed) return false;
+  if ("error" in parsed) return null;
 
-  return (
+  const sameEmployee =
     parsed.manifest.source?.subdomain === connection.credentials.subdomain &&
-    parsed.manifest.source?.employeeId === connection.employeeId
-  );
+    parsed.manifest.source?.employeeId === connection.employeeId;
+  return sameEmployee ? parsed.manifest : null;
+}
+
+/** Every filename a previous run of this app put in the folder. */
+function outputsOf(manifest: Manifest): Set<string> {
+  const names = new Set<string>([
+    MANIFEST_FILENAME,
+    SUMMARY_CSV_FILENAME,
+    SUMMARY_PDF_FILENAME,
+  ]);
+  for (const entry of manifest.entries) {
+    if (entry.file?.savedAs) names.add(entry.file.savedAs);
+  }
+  for (const orphan of manifest.orphanFiles) {
+    if (orphan.savedAs) names.add(orphan.savedAs);
+  }
+  return names;
 }
 
 function encodeUtf8(text: string): Uint8Array {
