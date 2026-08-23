@@ -94,12 +94,21 @@ function Verdicts({
 
   const confirmed = Object.values(verdicts).filter((v) => v === "confirms").length;
   if (confirmed === 0) {
-    // Every axis inconclusive: the page was legible enough to answer with, but
-    // nothing on it either agreed or disagreed. Saying "verified" here would
-    // be a lie by omission.
+    // Every axis inconclusive. Saying only that resolves nothing for the user -
+    // they still have to open the document to find out why. So the reading
+    // itself is shown: "the page reads X, dated Y" is something a person can
+    // act on in a second, and it is what the check actually learned.
+    const read = [
+      extracted?.certificationName ? `reads “${extracted.certificationName}”` : null,
+      extracted?.issuedDate ? `is dated ${extracted.issuedDate}` : null,
+      extracted?.personName ? `names ${extracted.personName}` : null,
+    ].filter((part): part is string => part != null);
+
     return (
       <div className="sub verdict-inconclusive">
-        The page did not say enough to confirm or contradict this.
+        {read.length > 0
+          ? `Nothing to confirm or contradict — the page ${read.join(", ")}.`
+          : "The page did not say enough to confirm or contradict this."}
         <span className="verdict-source"> Read by {provider}.</span>
       </div>
     );

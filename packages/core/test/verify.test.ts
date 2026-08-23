@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cleanIsoDate, compareExtraction, parseExtraction } from "../src/verify.js";
+import {
+  cleanIsoDate,
+  compareExtraction,
+  corePart,
+  parseExtraction,
+} from "../src/verify.js";
 import type { ExtractedCertificate } from "../src/verify.js";
 import type { EmployeeIdentity, TrainingItem } from "../src/types.js";
 
@@ -186,6 +191,54 @@ describe("compareExtraction: the mislabels that actually happened", () => {
     });
 
     expect(result.verdicts.name).toBe("confirms");
+  });
+});
+
+describe("compareExtraction: catalogue references", () => {
+  // From a real run. BambooHR holds "Firefighter 1 (NFPA-1001)"; the page is a
+  // commendation-style certificate reading "Firefighter I" with no standard
+  // number anywhere on it. Counting nfpa and 1001 as required words made the
+  // score 2 of 4 - under the threshold, reported as telling us nothing, for a
+  // certificate that plainly matches.
+  it("confirms a certificate that omits the standard number in the record name", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "Firefighter 1 (NFPA-1001)" }),
+      extracted: extracted({
+        certificationName: "Certificate of Commendation — Firefighter I",
+      }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("confirms");
+  });
+
+  it("handles the same qualifier written without brackets", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "Firefighter 1 - NFPA 1001" }),
+      extracted: extracted({ certificationName: "Firefighter I" }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("confirms");
+  });
+
+  // Demoted, not discarded: a conflicting level still has to be caught, and
+  // the number check runs on the full name.
+  it("still contradicts a different level despite the demoted qualifier", () => {
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "Firefighter 1 (NFPA-1001)" }),
+      extracted: extracted({ certificationName: "Firefighter II" }),
+      identity: me,
+      allItems: [],
+    });
+
+    expect(result.verdicts.name).toBe("contradicts");
+  });
+
+  it("leaves a name that is only a qualifier alone", () => {
+    expect(corePart("(NFPA-1001)")).toBe("(NFPA-1001)");
   });
 });
 

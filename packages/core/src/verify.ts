@@ -326,6 +326,30 @@ export function compareExtraction(input: CompareInput): CompareResult {
   };
 }
 
+/**
+ * The part of a certification's name a document can be expected to print.
+ *
+ * BambooHR names carry catalogue references the certificate itself has no
+ * reason to show: "Firefighter 1 (NFPA-1001)" is printed on the page as
+ * "Firefighter I", with the standard number living only in the records system.
+ * Counting those words as required made the denominator larger than anything
+ * the document could satisfy - a real live run produced 2 of 4 for a
+ * certificate that plainly matched, which fell under the threshold and was
+ * reported as telling us nothing.
+ *
+ * The parenthetical is not discarded, only demoted: it still counts as
+ * corroboration when it does appear.
+ */
+export function corePart(name: string): string {
+  const stripped = name
+    .replace(/[([{][^)\]}]*[)\]}]/g, " ")
+    // A trailing standard reference, the same qualifier without brackets.
+    .replace(/[-–—,]\s*(nfpa|iso|ansi|osha|astm)\b[^,]*/gi, " ")
+    .trim();
+  // If the qualifier WAS the name, there is nothing to demote.
+  return stripped ? stripped : name;
+}
+
 function compareName(item: TrainingItem, printed: string | null): Verdict {
   if (!printed) return "inconclusive";
 
@@ -340,9 +364,14 @@ function compareName(item: TrainingItem, printed: string | null): Verdict {
     return "contradicts";
   }
 
-  const { ratio } = tokenOverlap(item.name, printed);
-  if (ratio >= NAME_CONFIRM_RATIO) return "confirms";
-  if (ratio === 0) return "contradicts";
+  // Measured against the part of the name a document could actually print.
+  const core = tokenOverlap(corePart(item.name), printed);
+  if (core.ratio >= NAME_CONFIRM_RATIO) return "confirms";
+
+  // Nothing shared at all, on the FULL name, is the only safe reading of
+  // "this is a different certificate" - a document that echoes the catalogue
+  // reference and nothing else is odd, but it is not evidence against.
+  if (tokenOverlap(item.name, printed).ratio === 0) return "contradicts";
   return "inconclusive";
 }
 
@@ -392,7 +421,7 @@ function betterFitFor(
   let best: { key: string; ratio: number } | null = null;
   for (const candidate of allItems) {
     if (candidate.key === current.key) continue;
-    const { ratio } = tokenOverlap(candidate.name, printed);
+    const { ratio } = tokenOverlap(corePart(candidate.name), printed);
     if (ratio < NAME_CONFIRM_RATIO) continue;
     // Numbers must positively agree for a suggestion, not merely fail to
     // conflict; this is an assertion about the right answer, not a doubt about
