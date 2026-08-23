@@ -1,3 +1,4 @@
+import { hasStableIdentity } from "./items.js";
 import { stemOf } from "./naming.js";
 import type { EmployeeFile, TrainingItem } from "./types.js";
 
@@ -78,7 +79,13 @@ export function buildMatchPlan(
 
   // User-confirmed pairs win outright and are never re-scored.
   for (const [fileId, itemKey] of Object.entries(confirmed)) {
-    if (!itemsByKey.has(itemKey)) continue;
+    const confirmedItem = itemsByKey.get(itemKey);
+    if (!confirmedItem) continue;
+    // A key built from a row's POSITION cannot carry a decision between runs:
+    // it would still match after the rows moved, and match the wrong record.
+    // Rescoring such a row is the safe answer - the user may have to repeat a
+    // correction, which is much cheaper than silently inheriting a wrong one.
+    if (!hasStableIdentity(confirmedItem)) continue;
     if (!files.some((f) => f.id === fileId)) continue;
     matches.push({
       itemKey,

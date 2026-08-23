@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { EXTRACTION_JSON_SCHEMA, EXTRACTION_PROMPT, compareExtraction, parseExtraction, runPool } from "@bamboo-ep/core";
 import type { EmployeeIdentity, TrainingItem, Verification } from "@bamboo-ep/core";
-import { aiExtract } from "./platform";
+import { aiExtract, resolveAiSettings } from "./platform";
 import type { AiSettings } from "./platform";
 import { base64Of } from "./preview";
 import type { Previews } from "./usePreviews";
@@ -77,9 +77,13 @@ export function useVerification(input: VerificationInput): Verifications {
       running.current += 1;
       setBusy(true);
 
+      // The SAME resolution the request uses, so the manifest names the model
+      // that actually read the page rather than the fact that a default was in
+      // force at the time.
+      const resolved = resolveAiSettings(settings);
       const base = {
-        provider: settings.provider,
-        model: settings.model || "(provider default)",
+        provider: resolved.provider,
+        model: resolved.model,
         verifiedAt: new Date().toISOString(),
         bambooFileId: fileId,
       };

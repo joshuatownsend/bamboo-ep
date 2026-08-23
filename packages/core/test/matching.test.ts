@@ -249,6 +249,43 @@ describe("buildMatchPlan", () => {
   });
 });
 
+describe("buildMatchPlan: positional keys are not identity", () => {
+  // A certifications row may carry no id of its own, in which case its key is
+  // built from where it sat in the response. Remembering a decision against
+  // that key means the decision follows the SLOT, not the certification: add a
+  // row above it and a saved certificate is handed to a different record, at
+  // full confidence, with nothing on screen suggesting anything moved.
+  it("rescores a confirmed pairing whose key came from a row position", () => {
+    const items = [
+      item({ key: "certifications:row-0", name: "CPR" }),
+      item({ key: "certifications:row-1", name: "Bloodborne Pathogens" }),
+    ].map((i) => ({ ...i, source: "certifications" as const, id: i.key.split(":")[1]! }));
+
+    const files = [file({ id: "100", name: "bloodborne pathogens" })];
+    const plan = buildMatchPlan(items, files, {
+      confirmed: { "100": "certifications:row-0" },
+    });
+
+    // Not inherited as a confirmed pairing...
+    expect(plan.matches.some((m) => m.confirmedByUser)).toBe(false);
+    // ...and the scorer gives the file to the record that actually matches.
+    expect(plan.matches.find((m) => m.fileId === "100")?.itemKey).toBe(
+      "certifications:row-1",
+    );
+  });
+
+  it("still honours a confirmed pairing when the row has a real id", () => {
+    const items = [
+      { ...item({ key: "certifications:88", name: "CPR" }), source: "certifications" as const, id: "88" },
+    ];
+    const plan = buildMatchPlan(items, [file({ id: "100", name: "unrelated" })], {
+      confirmed: { "100": "certifications:88" },
+    });
+
+    expect(plan.matches[0]?.confirmedByUser).toBe(true);
+  });
+});
+
 describe("compareNumbers", () => {
   // A shared standard number used to mask a conflicting level, so the wrong
   // rung of a certification ladder scored as agreement.

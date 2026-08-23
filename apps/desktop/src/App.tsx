@@ -170,6 +170,22 @@ export default function App() {
         // folder may only have been chosen a moment ago, and its contents can
         // have changed while the user was reviewing.
         const plan = await planExportInto(directory, connection);
+
+        // The manifest and the two summaries are written under fixed names,
+        // which the allocator can steer certificates away from but cannot
+        // rename. In a folder that is not ours those names may already be
+        // taken, and the write refuses to replace them - after every
+        // certificate has been downloaded, leaving a folder of files with no
+        // manifest to describe them. Better to say so before starting.
+        const blocked = FIXED_OUTPUT_NAMES.filter((name) => plan.reserved.includes(name));
+        if (blocked.length > 0) {
+          throw new Error(
+            `That folder already contains ${blocked.join(", ")}, which this export ` +
+              "would have to replace, and it was not written by this app. Choose an " +
+              "empty folder, or one you exported to before.",
+          );
+        }
+
         const write = directoryWriter(directory, plan.overwrite);
 
         const pullResult = await executePull({
@@ -412,6 +428,13 @@ export interface ExportPlan {
 
 const EMPTY_PLAN: ExportPlan = { reserved: [], overwrite: false };
 
+/** Written under names the allocator cannot vary, so collisions are fatal. */
+const FIXED_OUTPUT_NAMES = [
+  MANIFEST_FILENAME,
+  SUMMARY_CSV_FILENAME,
+  SUMMARY_PDF_FILENAME,
+] as const;
+
 /**
  * Work out what is safe to write over in a folder.
  *
@@ -461,10 +484,24 @@ async function readPriorManifest(
   const parsed = parseManifest(text);
   if ("error" in parsed) return null;
 
+  // parseManifest checks the version and that `entries` is an array, which is
+  // all Part 2 needs to refuse a file it cannot read. Authorising REPLACEMENT
+  // is a stronger claim, so every field read below is checked here: a manifest
+  // that was partially copied or hand-edited must fall back to "not ours",
+  // which is what the surrounding contract promises, rather than throwing on
+  // a missing array and stranding the user before the review screen.
+  const manifest = parsed.manifest;
+  const structurallySound =
+    Array.isArray(manifest.entries) &&
+    Array.isArray(manifest.orphanFiles) &&
+    typeof manifest.source?.subdomain === "string" &&
+    typeof manifest.source?.employeeId === "string";
+  if (!structurallySound) return null;
+
   const sameEmployee =
-    parsed.manifest.source?.subdomain === connection.credentials.subdomain &&
-    parsed.manifest.source?.employeeId === connection.employeeId;
-  return sameEmployee ? parsed.manifest : null;
+    manifest.source.subdomain === connection.credentials.subdomain &&
+    manifest.source.employeeId === connection.employeeId;
+  return sameEmployee ? manifest : null;
 }
 
 /** Every filename a previous run of this app put in the folder. */
@@ -474,11 +511,14 @@ function outputsOf(manifest: Manifest): Set<string> {
     SUMMARY_CSV_FILENAME,
     SUMMARY_PDF_FILENAME,
   ]);
+  // Every `savedAs` is type-checked rather than trusted: a name that is not a
+  // string would otherwise be added as one and quietly mark some real file as
+  // ours - the same over-claiming this function exists to prevent.
   for (const entry of manifest.entries) {
-    if (entry.file?.savedAs) names.add(entry.file.savedAs);
+    if (typeof entry?.file?.savedAs === "string") names.add(entry.file.savedAs);
   }
   for (const orphan of manifest.orphanFiles) {
-    if (orphan.savedAs) names.add(orphan.savedAs);
+    if (typeof orphan?.savedAs === "string") names.add(orphan.savedAs);
   }
   return names;
 }

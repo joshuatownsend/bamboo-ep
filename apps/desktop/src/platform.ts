@@ -76,6 +76,22 @@ export const aiKeyStore = {
 };
 
 /**
+ * Fill in whichever of model and address the user left blank.
+ *
+ * Exported because the manifest has to record the model that actually examined
+ * the certificate. Writing "the default" there would lose which model that was,
+ * and would turn into a false record the day the default changes.
+ */
+export function resolveAiSettings(settings: AiSettings): Required<AiSettings> {
+  const defaults = AI_DEFAULTS[settings.provider];
+  return {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl.trim() || defaults.baseUrl,
+    model: settings.model.trim() || defaults.model,
+  };
+}
+
+/**
  * Send one page image to the model. Returns the model's answer as raw text;
  * making sense of it is `packages/core`'s job, so the prompt, the schema and
  * the parser stay together where they can be tested.
@@ -87,11 +103,11 @@ export function aiExtract(args: {
   imageBase64: string;
   imageMime: string;
 }): Promise<string> {
-  const defaults = AI_DEFAULTS[args.settings.provider];
+  const resolved = resolveAiSettings(args.settings);
   return invoke("ai_extract", {
-    provider: args.settings.provider,
-    baseUrl: args.settings.baseUrl.trim() || defaults.baseUrl,
-    model: args.settings.model.trim() || defaults.model,
+    provider: resolved.provider,
+    baseUrl: resolved.baseUrl,
+    model: resolved.model,
     prompt: args.prompt,
     schema: args.schema,
     imageBase64: args.imageBase64,
