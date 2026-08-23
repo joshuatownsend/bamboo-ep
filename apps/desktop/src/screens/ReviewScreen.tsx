@@ -144,14 +144,55 @@ export function ReviewScreen({
     return !(match && match.fileId === assigned && match.confidence === "high");
   };
 
+  /**
+   * A check that did not produce an answer, for either reason it can fail.
+   *
+   * The two cases look different in the data and identical to the user. A
+   * refused request never reaches the model and lands as `failed`; a model
+   * that replied unusably lands as `done` with an error inside it. Both mean
+   * "we asked and learned nothing", and both are worth asking again - a
+   * provider outage, an expired key, or a spending limit reached mid-sweep
+   * can leave a whole batch in this state through no fault of the documents.
+   */
+  const needsAnotherAttempt = (itemKey: string): boolean => {
+    const state = checks.stateOf(itemKey);
+    if (state.status === "failed") return true;
+    return state.status === "done" && state.verification.error != null;
+  };
+
+  const checkable = (itemKey: string): boolean =>
+    !excluded.has(itemKey) && Boolean(assignments[itemKey]);
+
+  const pairsFor = (keys: readonly string[]) =>
+    keys.map((key) => ({
+      item: itemsByKey.get(key) as TrainingItem,
+      fileId: assignments[key]!,
+    }));
+
   const flaggedPairs = useMemo(
     () =>
-      workspace.items
-        .filter((i) => !excluded.has(i.key) && isFlagged(i.key))
-        .filter((i) => checks.stateOf(i.key).status === "idle")
-        .map((i) => ({ item: i as TrainingItem, fileId: assignments[i.key]! })),
+      pairsFor(
+        workspace.items
+          .map((i) => i.key)
+          .filter(
+            (key) =>
+              checkable(key) && isFlagged(key) && checks.stateOf(key).status === "idle",
+          ),
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [assignments, excluded, matchByItem, workspace.items, checks],
+  );
+
+  /**
+   * Retries are NOT restricted to flagged rows. A row the user checked by hand
+   * was an explicit request, and a failure is no reason to quietly drop it
+   * from the retry - it would be the one row left behind by a button that
+   * claims to retry everything.
+   */
+  const retryablePairs = useMemo(
+    () => pairsFor(workspace.items.map((i) => i.key).filter((key) => checkable(key) && needsAnotherAttempt(key))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assignments, excluded, workspace.items, checks],
   );
 
   /** A file may back only one record, so offer only what is still free. */
@@ -280,6 +321,22 @@ export function ReviewScreen({
                 : flaggedPairs.length === 0
                   ? "No uncertain pairings left"
                   : `Check ${flaggedPairs.length} uncertain pairing${flaggedPairs.length === 1 ? "" : "s"} with AI`}
+            </button>
+          )}
+
+          {/* Only shown when there is something to retry. A permanently
+              visible retry button would read as "the last run went badly"
+              on every run that went fine. */}
+          {aiKeyPresent && retryablePairs.length > 0 && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={checks.busy}
+              onClick={() => void checks.verifyMany(retryablePairs)}
+            >
+              {checks.busy
+                ? "Retrying…"
+                : `Retry ${retryablePairs.length} check${retryablePairs.length === 1 ? "" : "s"} that did not complete`}
             </button>
           )}
           <span className="field-hint">
