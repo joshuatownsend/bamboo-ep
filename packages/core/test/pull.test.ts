@@ -532,6 +532,46 @@ describe("executePull: document checks in the manifest", () => {
     expect(manifest.entries[0]?.verification?.error).toMatch(/credit balance/);
   });
 
+  // A well-formed answer saying the scan is unreadable carries no error, but
+  // nothing was learned from it. Counting it as verified would tell Part 2 a
+  // folder of illegible scans had all been checked and cleared.
+  it("does not count an illegible scan as verified", async () => {
+    const fs = memoryFs();
+    const unreadable = {
+      ...verification("100", "confirms"),
+      extracted: {
+        certificationName: null,
+        issuedDate: null,
+        expirationDate: null,
+        personName: null,
+        alsoMentioned: [],
+        documentType: "unreadable" as const,
+        legible: false,
+      },
+      verdicts: {
+        name: "inconclusive" as const,
+        date: "inconclusive" as const,
+        person: "inconclusive" as const,
+      },
+    };
+
+    await executePull({
+      ...baseOptions,
+      client: stubClient(),
+      workspace: workspaceOf(items, files),
+      decisions: {
+        confirmed: { "100": "training:1" },
+        verifications: { "training:1": unreadable },
+      },
+      writeFile: fs.writeFile,
+    });
+
+    const manifest = readManifest(fs);
+    expect(manifest.summary.verified).toBe(0);
+    // Still recorded: the attempt happened and its result is evidence.
+    expect(manifest.entries[0]?.verification).not.toBeNull();
+  });
+
   // Decision: a contradicted check warns, it never blocks. The certificate is
   // still downloaded and still reaches the manifest.
   it("warns about a contradiction without withholding the file", async () => {

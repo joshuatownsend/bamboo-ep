@@ -257,6 +257,27 @@ describe("compareExtraction: catalogue references", () => {
     expect(result.verdicts.name).toBe("contradicts");
   });
 
+  // The dangerous half of demoting qualifiers. "CPR (Adult)" reduced to "CPR"
+  // is matched perfectly by a page reading "CPR Pediatric" - a confirmation
+  // for the wrong credential, which is the exact failure this check exists to
+  // prevent. A qualifier that reads like a word is part of the name.
+  it("keeps a qualifier that distinguishes one credential from another", () => {
+    expect(corePart("CPR (Adult)")).toBe("CPR (Adult)");
+
+    const result = compareExtraction({
+      item: item({ key: "training:1", name: "CPR (Adult)" }),
+      extracted: extracted({ certificationName: "CPR Pediatric" }),
+      identity: me,
+      allItems: [],
+    });
+    expect(result.verdicts.name).not.toBe("confirms");
+  });
+
+  it("still removes a standards reference", () => {
+    expect(corePart("Firefighter 1 (NFPA-1001)").trim()).toBe("Firefighter 1");
+    expect(corePart("Bloodborne Pathogens (2016)").trim()).toBe("Bloodborne Pathogens");
+  });
+
   it("leaves a name that is only a qualifier alone", () => {
     expect(corePart("(NFPA-1001)")).toBe("(NFPA-1001)");
   });

@@ -142,8 +142,16 @@ export function buildManifest(args: {
   // "we asked and could not tell" is not "we never asked". But it is NOT a
   // verified certificate, and counting it as one would let a manifest report
   // every entry verified when every single request had failed.
+  // "Verified" has to mean the page was actually read. A well-formed answer
+  // reporting an illegible scan carries no error, and compareExtraction
+  // rightly makes every verdict inconclusive for it - so counting it here
+  // would tell Part 2 that a folder of unreadable scans had all been checked
+  // and cleared.
   const verified = args.entries.filter(
-    (e) => e.verification != null && e.verification.error == null,
+    (e) =>
+      e.verification != null &&
+      e.verification.error == null &&
+      e.verification.extracted?.legible === true,
   ).length;
   const contradicted = args.entries.filter(
     (e) => e.verification != null && isTroubling(e.verification),

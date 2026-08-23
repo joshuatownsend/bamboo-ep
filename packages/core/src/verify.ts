@@ -383,12 +383,36 @@ export function compareExtraction(input: CompareInput): CompareResult {
  */
 export function corePart(name: string): string {
   const stripped = name
-    .replace(/[([{][^)\]}]*[)\]}]/g, " ")
+    .replace(/[([{]([^)\]}]*)[)\]}]/g, (whole, inner: string) =>
+      isCatalogueReference(inner) ? " " : whole,
+    )
     // A trailing standard reference, the same qualifier without brackets.
     .replace(/[-–—,]\s*(nfpa|iso|ansi|osha|astm)\b[^,]*/gi, " ")
     .trim();
   // If the qualifier WAS the name, there is nothing to demote.
   return stripped ? stripped : name;
+}
+
+/**
+ * Is this bracketed text a catalogue reference, or part of the name?
+ *
+ * The distinction decides a verdict, so it errs towards keeping. Stripping
+ * "(NFPA-1001)" from "Firefighter 1" costs nothing when it is wrong - the
+ * qualifier still corroborates wherever the page prints it. Stripping
+ * "(Adult)" from "CPR (Adult)" reduces the record to "CPR", which a page
+ * reading "CPR Pediatric" then matches perfectly: a confirmation for the wrong
+ * credential, which is the exact failure this check exists to prevent.
+ *
+ * So only two shapes go: a named standards body, and a bare code. Anything
+ * that reads like a word stays.
+ */
+function isCatalogueReference(text: string): boolean {
+  return (
+    /\b(nfpa|iso|ansi|astm|osha|iec|ieee|aha|nims|epa|dot|ahj)\b/i.test(text) ||
+    // A run of three or more digits is a standard number, not a qualifier:
+    // "(Level 2)" and "(Adult)" survive, "(1001)" and "(2016)" do not.
+    /\d{3,}/.test(text)
+  );
 }
 
 /**
