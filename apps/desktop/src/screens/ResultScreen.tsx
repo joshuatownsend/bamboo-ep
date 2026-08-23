@@ -11,13 +11,19 @@ import type { PullResult } from "@bamboo-ep/core";
 
 interface Props {
   result: PullResult;
+  /**
+   * Trouble with the export itself: the printable summary, the manifest, or
+   * clearing a previous run's files. Distinct from `result.failures`, which
+   * means a certificate could not be downloaded.
+   */
+  exportProblems: readonly string[];
   outputDir: string | null;
   onRestart: () => void;
 }
 
-export function ResultScreen({ result, outputDir, onRestart }: Props) {
+export function ResultScreen({ result, exportProblems, outputDir, onRestart }: Props) {
   const { summary } = result.manifest;
-  const hasFailures = result.failures.length > 0;
+  const hasFailures = result.failures.length > 0 || exportProblems.length > 0;
   const savedOrphanCount = result.manifest.orphanFiles.filter(
     (f) => f.savedAs != null,
   ).length;
@@ -51,7 +57,22 @@ export function ResultScreen({ result, outputDir, onRestart }: Props) {
           )}
         </dl>
 
-        {hasFailures && (
+        {exportProblems.length > 0 && (
+          <div className="banner warn">
+            <strong>The folder is not quite complete:</strong>
+            <ul>
+              {exportProblems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+            <p>
+              Your certificates are unaffected — this is about the summary files and
+              tidying up, not the downloads.
+            </p>
+          </div>
+        )}
+
+        {result.failures.length > 0 && (
           <div className="banner error">
             <strong>
               {result.failures.length} file

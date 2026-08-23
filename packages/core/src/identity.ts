@@ -83,6 +83,24 @@ function sameWord(a: string, b: string): boolean {
   return short.length >= 3 && long.startsWith(short);
 }
 
+/**
+ * Group the known words into one entry per actual name component.
+ *
+ * Two spellings that would satisfy `sameWord` are the same component, so
+ * "joshua" and "josh" collapse into one and cannot be counted twice.
+ */
+function componentsOf(known: ReadonlySet<string>): string[][] {
+  const components: string[][] = [];
+  for (const word of known) {
+    const existing = components.find((component) =>
+      component.some((alias) => sameWord(alias, word)),
+    );
+    if (existing) existing.push(word);
+    else components.push([word]);
+  }
+  return components;
+}
+
 export type PersonMatch = "same" | "different" | "unknown";
 
 /**
@@ -105,17 +123,17 @@ export function comparePersonName(
   const found = new Set(splitName(printed));
   if (found.size === 0) return "unknown";
 
-  // Counted by how many of the KNOWN words were matched, not how many printed
-  // words matched something: a page printing both "Josh" and "Joshua" must not
-  // score two hits against one first name.
-  const matched = new Set<string>();
-  for (const word of found) {
-    for (const candidate of known) {
-      if (sameWord(word, candidate)) matched.add(candidate);
-    }
-  }
-
-  const shared = [...matched];
+  // Counted in distinct name COMPONENTS, not in matched strings.
+  //
+  // BambooHR supplies the same name several ways - firstName "Joshua" and
+  // preferredName "Josh" - and those are one component wearing two spellings.
+  // Counting them separately let a certificate reading "Joshua Smith" match
+  // both and reach the threshold of two without the surname ever appearing,
+  // clearing a colleague's document as the employee's own.
+  const components = componentsOf(known);
+  const shared = components.filter((component) =>
+    [...found].some((word) => component.some((alias) => sameWord(word, alias))),
+  );
   if (shared.length >= 2) return "same";
 
   // A single shared word is genuinely ambiguous: two colleagues named Smith

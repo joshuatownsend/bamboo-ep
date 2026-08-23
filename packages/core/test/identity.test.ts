@@ -81,6 +81,23 @@ describe("comparePersonName", () => {
     expect(comparePersonName("JOSH JOSHUA DELGADO", shortForm)).toBe("unknown");
   });
 
+  // BambooHR supplies the same name twice - firstName "Joshua",
+  // preferredName "Josh" - and those are one component in two spellings.
+  // Counting them separately let "Joshua Smith" match both and reach the
+  // threshold without the surname ever appearing, clearing a colleague's
+  // certificate as the employee's own.
+  it("does not let two spellings of one first name clear a stranger", () => {
+    const both = {
+      firstName: "Joshua",
+      lastName: "Townsend",
+      displayName: "Joshua Townsend",
+      preferredName: "Josh",
+    };
+    expect(comparePersonName("Joshua Smith", both)).toBe("unknown");
+    // The real employee still matches, on first name plus surname.
+    expect(comparePersonName("TOWNSEND JOSHUA RUSSELL", both)).toBe("same");
+  });
+
   it("keeps unrelated short names apart", () => {
     expect(comparePersonName("Mark Delgado", { ...me, firstName: "Maria" })).toBe(
       "different",

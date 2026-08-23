@@ -69,6 +69,13 @@ export default function App() {
    * when the collision protection did something.
    */
   const [exportPlan, setExportPlan] = useState<ExportPlan>(EMPTY_PLAN);
+  /**
+   * Trouble with the export itself - the printable summary, the manifest, or
+   * clearing a previous run's files - as opposed to a certificate that would
+   * not download. Held apart because the two need different words and send the
+   * user to different places.
+   */
+  const [exportProblems, setExportProblems] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(
     null,
   );
@@ -336,21 +343,17 @@ export default function App() {
           }
         }
 
+        // Kept OUT of `failures`, which means "a certificate could not be
+        // downloaded" - the result screen tells the user those records are
+        // marked as having no file and sends them looking for missing
+        // certificates. A summary that could not be written, or a stale file
+        // that could not be removed, is a different problem with a different
+        // remedy, and every certificate may well have saved perfectly.
         const finalResult = {
           ...pullResult,
           manifest: { ...manifest, warnings: [...manifest.warnings, ...problems] },
-          // Recorded as failures, not only as warnings. The result screen
-          // decides "Finished" from this list, so a run that quietly claims a
-          // PDF it never wrote would otherwise look like a clean one.
-          failures: [
-            ...pullResult.failures,
-            ...problems.map((message, index) => ({
-              fileId: `export-problem-${index}`,
-              label: "Export",
-              message,
-            })),
-          ],
         };
+        setExportProblems(problems);
 
 
         setResult(finalResult);
@@ -424,6 +427,7 @@ export default function App() {
     setConnection(null);
     setWorkspace(null);
     setResult(null);
+    setExportProblems([]);
     setError(null);
   }, []);
 
@@ -514,6 +518,7 @@ export default function App() {
         {step === "result" && result && (
           <ResultScreen
             result={result}
+            exportProblems={exportProblems}
             outputDir={settings.outputDir}
             onRestart={restart}
           />
