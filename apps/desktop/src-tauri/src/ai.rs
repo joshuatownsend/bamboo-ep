@@ -125,8 +125,19 @@ pub async fn ai_extract(
         }
     };
 
+    // Every hop is checked, not just the first. reqwest follows redirects by
+    // default, so an allowed https endpoint answering 307 could have
+    // resent the POST - certificate image and all - to a plain-http host,
+    // straight past the boundary this module exists to enforce.
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if check_destination(attempt.url().as_str()).is_ok() {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .build()
         .map_err(|e| format!("Could not start the request: {e}"))?;
 

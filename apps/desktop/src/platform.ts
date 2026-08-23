@@ -212,19 +212,24 @@ export async function chooseOutputDirectory(): Promise<string | null> {
 export function directoryWriter(
   directory: string,
   /**
-   * True only for a folder this app exported to before, where replacing the
-   * previous run's output is the intent. Everywhere else the write refuses to
-   * touch an existing name, so a certificate cannot destroy an unrelated
-   * document and a planted symlink cannot redirect the bytes elsewhere.
+   * Exactly the filenames a previous export of ours produced, and therefore
+   * the only ones this run may replace.
+   *
+   * Granted per FILE rather than per folder. A folder-wide permission was
+   * decided from a directory listing taken before the downloads began, so a
+   * file appearing under a generated name while they ran - dropped in by the
+   * user, or by anything else - would have been replaced on the strength of
+   * an observation made minutes earlier. A name the prior manifest never
+   * listed is never ours, whenever it turned up.
    */
-  overwrite: boolean,
+  replaceable: ReadonlySet<string>,
 ): (filename: string, bytes: Uint8Array) => Promise<void> {
   return async (filename, bytes) => {
     await invoke("write_export_file", {
       directory,
       filename,
       contents: Array.from(bytes),
-      overwrite,
+      overwrite: replaceable.has(filename),
     });
   };
 }

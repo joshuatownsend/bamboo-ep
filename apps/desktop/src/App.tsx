@@ -187,6 +187,8 @@ export default function App() {
         // folder may only have been chosen a moment ago, and its contents can
         // have changed while the user was reviewing.
         const plan = await planExportInto(directory, connection);
+        // Only what the previous export actually produced may be replaced.
+        const replaceable = new Set(plan.priorOutputs);
 
         // The manifest and the two summaries are written under fixed names,
         // which the allocator can steer certificates away from but cannot
@@ -212,7 +214,7 @@ export default function App() {
           );
         }
 
-        const write = directoryWriter(directory, plan.overwrite);
+        const write = directoryWriter(directory, replaceable);
 
         const pullResult = await executePull({
           client,
@@ -248,7 +250,9 @@ export default function App() {
         // `outputs` names what this export ACTUALLY produced - including
         // whether the PDF made it. That record is what lets the next run
         // replace its own files without ever touching one of the user's.
-        const replace = directoryWriter(directory, true);
+        // The manifest is ours by construction - this run wrote it moments ago -
+        // so it is replaceable even on a first export into an empty folder.
+        const replace = directoryWriter(directory, new Set([MANIFEST_FILENAME]));
 
         // Two separate operations, two separate outcomes. Sharing one catch
         // meant a failure to rewrite the manifest was reported as the PDF
@@ -265,6 +269,39 @@ export default function App() {
           problems.push(
             `The printable summary could not be created: ${messageOf(err)}. ` +
               "Every certificate and the spreadsheet summary were still saved.",
+          );
+        }
+
+        // Files the last export produced that this one did not. A changed
+        // filename template, an excluded record, or a file removed in BambooHR
+        // all leave certificates behind that appear in no manifest and no
+        // summary - and a stale certificate in an export folder is exactly the
+        // kind of thing someone downstream takes at face value.
+        //
+        // Only ever prior-manifest outputs: anything the user put there
+        // themselves was never ours to remove.
+        //
+        // Done BEFORE the manifest is rewritten, so a file that could not be
+        // removed is recorded in the manifest rather than only in memory.
+        const produced = new Set<string>([
+          ...pullResult.filesWritten,
+          MANIFEST_FILENAME,
+          SUMMARY_CSV_FILENAME,
+          ...(pdfWritten ? [SUMMARY_PDF_FILENAME] : []),
+        ]);
+        const undeleted: string[] = [];
+        for (const name of plan.priorOutputs.filter((name) => !produced.has(name))) {
+          // A folder left slightly untidy is a far smaller problem than a
+          // failed export, so this never sinks the run - but it is reported.
+          // Silence here would recreate the very thing the cleanup exists to
+          // prevent: a stale certificate sitting in a folder whose manifest,
+          // summary and result screen all say the export is complete.
+          await deleteExportFile(directory, name).catch(() => undeleted.push(name));
+        }
+        if (undeleted.length > 0) {
+          problems.push(
+            "These files from a previous export could not be removed and are still " +
+              `in the folder, though they appear in no summary: ${undeleted.join(", ")}.`,
           );
         }
 
@@ -307,32 +344,14 @@ export default function App() {
           // PDF it never wrote would otherwise look like a clean one.
           failures: [
             ...pullResult.failures,
-            ...problems.map((message) => ({
-              fileId: SUMMARY_PDF_FILENAME,
-              label: "Printable summary",
+            ...problems.map((message, index) => ({
+              fileId: `export-problem-${index}`,
+              label: "Export",
               message,
             })),
           ],
         };
 
-        // Files the last export produced that this one did not. A changed
-        // filename template, an excluded record, or a file removed in BambooHR
-        // all leave certificates behind that appear in no manifest and no
-        // summary - and a stale certificate in an export folder is exactly the
-        // kind of thing someone downstream takes at face value.
-        //
-        // Only ever prior-manifest outputs: anything the user put there
-        // themselves was never ours to remove.
-        const produced = new Set<string>([
-          ...finalResult.filesWritten,
-          ...FIXED_OUTPUT_NAMES,
-        ]);
-        const superseded = plan.priorOutputs.filter((name) => !produced.has(name));
-        for (const name of superseded) {
-          // A folder left slightly untidy is a far smaller problem than a
-          // failed export, so this never sinks the run.
-          await deleteExportFile(directory, name).catch(() => undefined);
-        }
 
         setResult(finalResult);
         setStep("result");
