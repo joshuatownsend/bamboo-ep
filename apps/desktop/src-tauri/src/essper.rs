@@ -402,6 +402,11 @@ pub async fn essper_upload_file(
     tenant: String,
     directory: String,
     filename: String,
+    // `content_type` is what BambooHR said this file was, carried through from
+    // the manifest. Preferred over anything inferred here: BambooHR served the
+    // bytes and named the type, while this end has only a filename - one this
+    // app generated - to reason from.
+    content_type: Option<String>,
 ) -> Result<EpResponse, String> {
     let path = crate::export_file_path(&directory, &filename)?;
     let size = std::fs::metadata(&path)
@@ -425,7 +430,7 @@ pub async fn essper_upload_file(
 
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename.clone())
-        .mime_str(content_type(&filename))
+        .mime_str(&declared_type(content_type.as_deref(), &filename))
         .map_err(|e| format!("Could not prepare \"{filename}\" for upload: {e}"))?;
 
     let response = client()?
@@ -457,6 +462,28 @@ pub async fn essper_upload_file(
 /// cards, and Part 1 saves whatever it was given under its original extension.
 /// Declaring a JPEG as `application/pdf` invites Essential Personnel to reject
 /// it, or to serve it back later as something it is not.
+/// What to tell Essential Personnel this file is.
+///
+/// The manifest's own record wins when it is present and usable. It comes from
+/// BambooHR, which served the bytes; the extension is a guess made from a name
+/// this app itself generated.
+fn declared_type(from_manifest: Option<&str>, filename: &str) -> String {
+    from_manifest
+        .map(str::trim)
+        .filter(|declared| {
+            // Only a plain `type/subtype`. The value crosses from the web layer
+            // into a header, and a value carrying its own parameters or line
+            // breaks has no business being copied there unexamined.
+            !declared.is_empty()
+                && declared.parse::<reqwest::header::HeaderValue>().is_ok()
+                && declared.split('/').count() == 2
+                && !declared.contains(';')
+                && declared.chars().all(|c| !c.is_whitespace())
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| content_type(filename).to_string())
+}
+
 fn content_type(filename: &str) -> &'static str {
     let extension = filename
         .rsplit_once('.')
@@ -478,7 +505,7 @@ fn content_type(filename: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{allowed, content_type, parse_app_key, tenant_origin, tenant_url};
+    use super::{allowed, content_type, declared_type, parse_app_key, tenant_origin, tenant_url};
 
     #[test]
     fn accepts_a_plain_company_name_and_a_pasted_address() {
@@ -568,5 +595,31 @@ mod tests {
         assert_eq!(parse_app_key(config).as_deref(), Some("abc123"));
         assert_eq!(parse_app_key("window.__EP_CONFIG__ = {};"), None);
         assert_eq!(parse_app_key(r#"{"API_KEY": ""}"#), None);
+    }
+
+    #[test]
+    fn prefers_what_bamboohr_said_the_file_was() {
+        // BambooHR served the bytes and named the type; the extension is a
+        // guess about a filename this app generated itself.
+        assert_eq!(declared_type(Some("image/bmp"), "cert"), "image/bmp");
+        assert_eq!(declared_type(Some("application/pdf"), "cert.jpg"), "application/pdf");
+    }
+
+    #[test]
+    fn falls_back_to_the_extension_when_the_manifest_says_nothing_usable() {
+        assert_eq!(declared_type(None, "cert.pdf"), "application/pdf");
+        assert_eq!(declared_type(Some(""), "cert.pdf"), "application/pdf");
+        assert_eq!(declared_type(Some("   "), "scan.png"), "image/png");
+        // Not a type at all, and nothing that could smuggle a second header
+        // value or extra parameters into the request.
+        assert_eq!(declared_type(Some("nonsense"), "cert.pdf"), "application/pdf");
+        assert_eq!(
+            declared_type(Some("text/html\r\nX-Evil: 1"), "cert.pdf"),
+            "application/pdf"
+        );
+        assert_eq!(
+            declared_type(Some("application/pdf; charset=utf-8"), "scan.png"),
+            "image/png"
+        );
     }
 }
