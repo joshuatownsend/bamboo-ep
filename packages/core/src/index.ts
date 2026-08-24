@@ -11,4 +11,5 @@ export * from "./manifest.js";
 export * from "./summary.js";
 export * from "./verify.js";
 export * from "./essper.js";
+export * from "./essper-client.js";
 export * from "./pull.js";
