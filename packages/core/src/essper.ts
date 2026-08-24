@@ -489,11 +489,19 @@ function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boole
   // A DERIVED expiry is not evidence of anything. Part 1 computes those from a
   // renewal frequency, so treating one as proof of a renewal would upload a
   // duplicate on the strength of this app's own arithmetic.
+  //
+  // The completion dates must not disagree in the other direction. A 2018
+  // credential expiring in 2027 is NOT a renewal of a 2020 recertification
+  // expiring in 2025: the EP row is the later sitting, and calling the older
+  // record a renewal would upload a stale certificate over a current one.
   if (
     !entry.expiresDerived &&
     entry.expires &&
     existing.expires &&
-    entry.expires > existing.expires
+    entry.expires > existing.expires &&
+    entry.completed &&
+    existing.completed &&
+    entry.completed >= existing.completed
   ) {
     return true;
   }

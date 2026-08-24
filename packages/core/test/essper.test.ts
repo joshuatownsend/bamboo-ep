@@ -571,3 +571,30 @@ describe("choosing which EP row to compare against", () => {
     expect(plan.items[0]!.existing!.id).toBe("current");
   });
 });
+
+describe("an older record that happens to run longer", () => {
+  /**
+   * A 2018 credential expiring in 2027 is not a renewal of a 2020
+   * recertification expiring in 2025. The EP row is the later sitting, and
+   * treating the older record as a renewal would upload a stale certificate
+   * over a current one.
+   */
+  it("is not a renewal, however far its expiry reaches", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ completed: "2018-04-15", expires: "2027-04-15" })],
+      templates: CATALOGUE,
+      existing: [
+        {
+          id: "u1",
+          templateId: "t-metro-100",
+          completed: "2020-06-01",
+          expires: "2025-06-01",
+          institution: null,
+          documentUrl: null,
+          importedFrom: null,
+        },
+      ],
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
+  });
+});
