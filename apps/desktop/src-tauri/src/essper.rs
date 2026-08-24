@@ -409,7 +409,10 @@ pub async fn essper_upload_file(
     // app generated - to reason from.
     content_type: Option<String>,
     // The hash the manifest recorded for this file when it was exported.
-    expected_sha256: Option<String>,
+    // Required, not optional: every manifest entry with a file has one, so an
+    // absent hash means the caller lost track of which file this is - which is
+    // the situation the check exists for, not a reason to skip it.
+    expected_sha256: String,
 ) -> Result<EpResponse, String> {
     let path = crate::export_file_path(&directory, &filename)?;
     let size = std::fs::metadata(&path)
@@ -429,14 +432,18 @@ pub async fn essper_upload_file(
     // that were exported. If the file has been replaced or damaged since, all
     // of that now describes something else, and uploading it would file the
     // wrong document under a real credential in the system of record.
-    if let Some(expected) = expected_sha256.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
-        let actual = sha256_hex(&bytes);
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(format!(
-                "\"{filename}\" has changed since it was exported, so it may no longer be the \
-                 certificate this record describes. Export again before uploading it."
-            ));
-        }
+    let expected = expected_sha256.trim();
+    if expected.is_empty() {
+        return Err(format!(
+            "Refusing to upload \"{filename}\": the export does not record what this file \
+             should contain, so there is no way to tell it is still the right certificate."
+        ));
+    }
+    if !sha256_hex(&bytes).eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "\"{filename}\" has changed since it was exported, so it may no longer be the \
+             certificate this record describes. Export again before uploading it."
+        ));
     }
     let cookies = session_cookies(&app, &tenant)?;
     if cookies.is_empty() {

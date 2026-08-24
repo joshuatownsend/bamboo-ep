@@ -147,10 +147,35 @@ function combinedCoverage(catalogueCoverage: number, recordCoverage: number): nu
   return ((1 + b2) * catalogueCoverage * recordCoverage) / (b2 * catalogueCoverage + recordCoverage);
 }
 
+/**
+ * Score a record against one template.
+ *
+ * EP exposes some entries under an abbreviation as well as a name, and the
+ * two can be quite different - a record reading "CPR" shares no word with an
+ * expanded catalogue name, so comparing the name alone dropped the right
+ * template out of the candidate list entirely. Both spellings are tried and
+ * the better one stands, since either is a legitimate way to name the same
+ * certification.
+ */
 export function scoreTemplate(recordName: string, template: EpTemplate): EpTemplateMatch {
+  const spellings = [template.name, template.abbreviation]
+    .map((value) => value?.trim())
+    .filter((value): value is string => !!value);
+  const unique = [...new Set(spellings)];
+
+  const scored = (unique.length > 0 ? unique : [template.name.trim()]).map((spelling) =>
+    scoreAgainst(recordName, template, spelling),
+  );
+  return scored.reduce((best, match) => (match.score > best.score ? match : best));
+}
+
+function scoreAgainst(
+  recordName: string,
+  template: EpTemplate,
+  catalogue: string,
+): EpTemplateMatch {
   const reasons: string[] = [];
   const record = withoutSourcePrefix(recordName);
-  const catalogue = template.name.trim();
 
   const numbers = compareNumbers(catalogue, [record]);
   if (numbers.verdict === "conflict") {
@@ -441,8 +466,28 @@ function newestFor(
  * upload a second copy of something already present.
  */
 function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boolean {
-  if (!entry.completed || !existing.completed) return false;
-  return entry.completed > existing.completed;
+  if (entry.completed && existing.completed && entry.completed > existing.completed) {
+    return true;
+  }
+
+  // Some credentials are renewed without the completion date moving: a licence
+  // keeps its original issue date and gains a later expiry. Comparing only
+  // completion dates called that a duplicate and left the expired copy standing
+  // in the system of record as the current one.
+  //
+  // A DERIVED expiry is not evidence of anything. Part 1 computes those from a
+  // renewal frequency, so treating one as proof of a renewal would upload a
+  // duplicate on the strength of this app's own arithmetic.
+  if (
+    !entry.expiresDerived &&
+    entry.expires &&
+    existing.expires &&
+    entry.expires > existing.expires
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

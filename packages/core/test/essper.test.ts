@@ -470,3 +470,75 @@ describe("names with nothing left to compare", () => {
     expect(match.confidence).not.toBe("high");
   });
 });
+
+describe("renewals that only move the expiry", () => {
+  const held = (over: Partial<EpUserCertification> = {}): EpUserCertification => ({
+    id: "u1",
+    templateId: "t-metro-100",
+    completed: "2018-04-15",
+    expires: "2024-04-15",
+    institution: null,
+    documentUrl: null,
+    importedFrom: null,
+    ...over,
+  });
+
+  /**
+   * Some credentials are renewed without the completion date moving: a licence
+   * keeps its original issue date and gains a later expiry. Comparing only
+   * completion dates called that a duplicate and left the expired copy
+   * standing as the current one.
+   */
+  it("uploads a record whose expiry runs past the one EP holds", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ completed: "2018-04-15", expires: "2027-04-15" })],
+      templates: CATALOGUE,
+      existing: [held()],
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+  });
+
+  /**
+   * Part 1 computes an expiry from the training type's renewal frequency when
+   * BambooHR states none. Treating that as proof of a renewal would upload a
+   * duplicate on the strength of this app's own arithmetic.
+   */
+  it("does not treat a derived expiry as evidence of a renewal", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ completed: "2018-04-15", expires: "2027-04-15", expiresDerived: true }),
+      ],
+      templates: CATALOGUE,
+      existing: [held()],
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
+  });
+});
+
+describe("catalogue entries hidden behind an abbreviation", () => {
+  /**
+   * EP exposes some entries under an abbreviation as well as a name, and the
+   * two can share no words at all. Comparing the name alone dropped the right
+   * template out of the candidate list entirely.
+   */
+  it("matches a record against the abbreviation when the name does not", () => {
+    const expanded: EpTemplate = {
+      id: "t-abbrev",
+      name: "Cardiopulmonary Resuscitation Provider Course",
+      abbreviation: "CPR",
+    };
+    const match = scoreTemplate("CPR", expanded);
+    expect(match.score).toBe(1);
+    expect(match.confidence).toBe("high");
+  });
+
+  it("still uses the name when it is the better of the two", () => {
+    const both: EpTemplate = {
+      id: "t-both",
+      name: "100 - Metrorail System Basics",
+      abbreviation: "M100",
+    };
+    const match = scoreTemplate("[TS] Metro 100 - Metrorail System Basics", both);
+    expect(match.confidence).toBe("high");
+  });
+});
