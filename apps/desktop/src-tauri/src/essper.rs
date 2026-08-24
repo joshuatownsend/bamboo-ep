@@ -30,6 +30,8 @@
 //! else.
 
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
@@ -236,7 +238,40 @@ fn session_cookies(app: &tauri::AppHandle, tenant: &str) -> Result<String, Strin
 /// in, because it differs per tenant and can be rotated. It is not a secret
 /// and grants nothing on its own - a request carrying it without a session is
 /// still refused.
+///
+/// Cached for the life of the session. An upload is two requests per
+/// certification, and fetching `config.js` before each one turned a batch of
+/// forty into a hundred and twenty round trips - more latency, and more
+/// chances for one of them to fail. It is dropped again when Essential
+/// Personnel rejects a request, so a rotated key costs one retry rather than
+/// a restart.
+static APP_KEYS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn app_key_cache() -> &'static Mutex<HashMap<String, String>> {
+    APP_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn forget_app_key(tenant: &str) {
+    if let Ok(mut cache) = app_key_cache().lock() {
+        cache.remove(tenant);
+    }
+}
+
 async fn app_key(tenant: &str) -> Result<String, String> {
+    if let Ok(cache) = app_key_cache().lock() {
+        if let Some(key) = cache.get(tenant) {
+            return Ok(key.clone());
+        }
+    }
+
+    let key = fetch_app_key(tenant).await?;
+    if let Ok(mut cache) = app_key_cache().lock() {
+        cache.insert(tenant.to_string(), key.clone());
+    }
+    Ok(key)
+}
+
+async fn fetch_app_key(tenant: &str) -> Result<String, String> {
     let url = format!("{}/config.js", tenant_origin(tenant)?);
     let body = client()?
         .get(&url)
@@ -261,7 +296,24 @@ fn parse_app_key(config_js: &str) -> Option<String> {
     (!key.is_empty()).then(|| key.to_string())
 }
 
+/// One client for the whole session.
+///
+/// `reqwest::Client` owns the connection pool, so building a new one per
+/// request throws away every kept-alive connection and repeats the TLS
+/// handshake. Cloning shares it - the type is a handle, not the machinery.
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
 fn client() -> Result<reqwest::Client, String> {
+    if let Some(existing) = HTTP.get() {
+        return Ok(existing.clone());
+    }
+    let built = build_client()?;
+    // A race here is harmless: whichever client wins, both are equivalent.
+    let _ = HTTP.set(built.clone());
+    Ok(built)
+}
+
+fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         // A redirect off the tenant host would carry the session cookie with
@@ -325,6 +377,11 @@ pub async fn essper_request(
         .await
         .map_err(|e| format!("Could not reach Essential Personnel: {e}"))?;
     let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        // Either the session ended or the application key was rotated. The
+        // key is the part this app caches, so it is the part to let go of.
+        forget_app_key(&tenant);
+    }
     let text = response.text().await.unwrap_or_default();
 
     Ok(EpResponse {
@@ -384,6 +441,9 @@ pub async fn essper_upload_file(
         .map_err(|e| format!("Could not upload \"{filename}\": {e}"))?;
 
     let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        forget_app_key(&tenant);
+    }
     Ok(EpResponse {
         status: status.as_u16(),
         ok: status.is_success(),

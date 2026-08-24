@@ -235,3 +235,43 @@ describe("failing closed on an answer we do not recognise", () => {
     );
   });
 });
+
+describe("knowing whether the list is complete", () => {
+  /**
+   * The earlier fallback took the page length as the total, which is the one
+   * number that cannot verify itself: a member with more certifications than
+   * a page holds would have their first page declared complete and everything
+   * past it offered for upload a second time.
+   */
+  it("refuses a list that does not say how many there are", async () => {
+    const { fetchImpl } = stub([
+      { body: JSON.stringify({ data: [{ _id: "u1", certificationTemplateId: "t1" }] }) },
+    ]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /did not say how many/i,
+    );
+  });
+
+  it("refuses a total that is not a number", async () => {
+    const { fetchImpl } = stub([
+      {
+        body: JSON.stringify({
+          total: "1",
+          data: [{ _id: "u1", certificationTemplateId: "t1" }],
+        }),
+      },
+    ]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /did not say how many/i,
+    );
+  });
+
+  it("refuses a certification row with no identifier of its own", async () => {
+    const { fetchImpl } = stub([
+      { body: JSON.stringify({ total: 1, data: [{ certificationTemplateId: "t1" }] }) },
+    ]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /no identifier/i,
+    );
+  });
+});

@@ -151,7 +151,22 @@ export class EpClient {
     }
     const rows = body.data;
 
-    const total = typeof body.total === "number" ? body.total : rows.length;
+    // Falling back to `rows.length` manufactures the very number being
+    // checked: a member with more certifications than one page holds would
+    // have their first page declared complete, and everything beyond it
+    // offered for upload again. Without a stated total there is nothing to
+    // verify against, which is a reason to stop rather than to assume.
+    if (typeof body.total !== "number" || !Number.isFinite(body.total)) {
+      throw new EpApiError({
+        status: 200,
+        path,
+        message:
+          "Essential Personnel did not say how many certifications you have, so there " +
+          "is no way to tell whether this list is complete. Refusing to continue, " +
+          "because an incomplete list would offer to upload records you already hold.",
+      });
+    }
+    const total = body.total;
     if (rows.length < total) {
       throw new EpApiError({
         status: 200,
@@ -165,6 +180,16 @@ export class EpClient {
 
     return rows.map((row) => {
       const certification = toCertification(asRecord(row) ?? {});
+      if (!certification.id) {
+        throw new EpApiError({
+          status: 200,
+          path,
+          message:
+            "One of the certifications on your Essential Personnel profile has no " +
+            "identifier. Refusing to continue, because it could not be pointed at if " +
+            "anything needed checking.",
+        });
+      }
       if (!certification.templateId) {
         throw new EpApiError({
           status: 200,
