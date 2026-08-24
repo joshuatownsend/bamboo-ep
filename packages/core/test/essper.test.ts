@@ -422,3 +422,51 @@ describe("records Essential Personnel could not accept", () => {
     expect(submissionFor(plan.items[0]!)).toBeNull();
   });
 });
+
+describe("one certification recorded twice in BambooHR", () => {
+  /**
+   * BambooHR concatenates the certifications table and the training list, so
+   * the same real certification often appears in both. The EP snapshot says
+   * what was there before this run and cannot say what this run has queued -
+   * so without checking, each copy finds nothing, and both are uploaded.
+   */
+  it("uploads the certification once, not once per record", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15" }),
+        entry({ key: "certifications:9", completed: "2018-04-15" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["ready", "duplicateInPlan"]);
+  });
+
+  it("keeps the later sitting when the two records disagree on the date", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15" }),
+        entry({ key: "certifications:9", completed: "2024-06-01" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    // The earlier record is the one demoted, even though it came first.
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+    expect(submissionFor(plan.items[1]!)!.completed).toBe("2024-06-01");
+  });
+});
+
+describe("names with nothing left to compare", () => {
+  /**
+   * "Training" and "Certification" both normalise to nothing once stop words
+   * are dropped. Treating two empty results as identical awarded a perfect
+   * score to a pair sharing no word at all.
+   */
+  it("does not call two empty normalisations a perfect match", () => {
+    const generic: EpTemplate = { id: "t-generic", name: "Certification", abbreviation: null };
+    const match = scoreTemplate("Training", generic);
+    expect(match.score).toBeLessThan(1);
+    expect(match.confidence).not.toBe("high");
+  });
+});

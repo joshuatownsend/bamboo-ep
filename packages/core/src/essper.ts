@@ -78,6 +78,7 @@ export type EpOutcome =
   | "alreadyInEp"
   | "importedByTargetSolutions"
   | "needsTriage"
+  | "duplicateInPlan"
   | "noCompletionDate"
   | "skipped"
   | "requested"
@@ -192,9 +193,13 @@ export function scoreTemplate(recordName: string, template: EpTemplate): EpTempl
     reasons.push(`Both say ${numbers.shared.join(", ")}`);
   }
 
-  // An exact name, once the bracketed source tag and catalogue number are
-  // discounted, is as good as this gets.
-  if (normalisedName(record) === normalisedName(catalogue)) {
+  // An exact name, once the bracketed source tag is discounted, is as good as
+  // this gets - but only when there is something left to compare. Names made
+  // entirely of stop words ("Training", "Certification") both normalise to
+  // nothing, and treating two nothings as identical awards a perfect score to
+  // a pair that shares no word at all.
+  const normalised = normalisedName(record);
+  if (normalised !== "" && normalised === normalisedName(catalogue)) {
     score = 1;
     reasons.length = 0;
     reasons.push("Names are identical");
@@ -236,6 +241,16 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
   const byTemplateId = new Map(input.templates.map((t) => [t.id, t]));
   const items: EpPlanItem[] = [];
   const catalogueRequests: string[] = [];
+  /**
+   * Templates this plan has already decided to upload, and where.
+   *
+   * The EP snapshot says what was there before this run; it cannot say what
+   * this run has queued. BambooHR concatenates the certifications table and
+   * the training list, so one real certification often appears in both - and
+   * without this, each copy checks the same untouched snapshot, finds nothing,
+   * and both are uploaded.
+   */
+  const queued = new Map<string, number>();
 
   for (const entry of input.entries) {
     // A certifications row with no id of its own is keyed by where it sat in
@@ -349,6 +364,40 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
       continue;
     }
 
+    const previous = queued.get(chosen.id);
+    if (previous !== undefined) {
+      // Two records for one certification. The later sitting is the one worth
+      // having in the system of record; the other is the same credential
+      // recorded twice in BambooHR, and uploading both would put two copies on
+      // the profile.
+      const earlier = items[previous]!;
+      const supersedes = (entry.completed ?? "") > (earlier.entry.completed ?? "");
+      const loser = supersedes ? earlier : null;
+      if (loser) {
+        items[previous] = {
+          ...earlier,
+          outcome: "duplicateInPlan",
+          explanation:
+            `Also recorded as "${entry.name}", completed ${entry.completed}, ` +
+            "which is the one being uploaded.",
+        };
+      } else {
+        items.push(
+          item(
+            entry,
+            "duplicateInPlan",
+            chosen,
+            candidates,
+            already,
+            `Already covered by "${earlier.entry.name}", completed ` +
+              `${earlier.entry.completed}, which is the one being uploaded.`,
+          ),
+        );
+        continue;
+      }
+    }
+
+    queued.set(chosen.id, items.length);
     items.push(
       item(
         entry,

@@ -30,6 +30,7 @@
 //! else.
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -407,6 +408,8 @@ pub async fn essper_upload_file(
     // bytes and named the type, while this end has only a filename - one this
     // app generated - to reason from.
     content_type: Option<String>,
+    // The hash the manifest recorded for this file when it was exported.
+    expected_sha256: Option<String>,
 ) -> Result<EpResponse, String> {
     let path = crate::export_file_path(&directory, &filename)?;
     let size = std::fs::metadata(&path)
@@ -420,6 +423,21 @@ pub async fn essper_upload_file(
     }
 
     let bytes = std::fs::read(&path).map_err(|e| format!("Could not read \"{filename}\": {e}"))?;
+
+    // Everything travelling with this file - which certification it is, what
+    // type it is, and whether a model found it legible - describes the bytes
+    // that were exported. If the file has been replaced or damaged since, all
+    // of that now describes something else, and uploading it would file the
+    // wrong document under a real credential in the system of record.
+    if let Some(expected) = expected_sha256.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+        let actual = sha256_hex(&bytes);
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(format!(
+                "\"{filename}\" has changed since it was exported, so it may no longer be the \
+                 certificate this record describes. Export again before uploading it."
+            ));
+        }
+    }
     let cookies = session_cookies(&app, &tenant)?;
     if cookies.is_empty() {
         return Err(
@@ -462,6 +480,16 @@ pub async fn essper_upload_file(
 /// cards, and Part 1 saves whatever it was given under its original extension.
 /// Declaring a JPEG as `application/pdf` invites Essential Personnel to reject
 /// it, or to serve it back later as something it is not.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// What to tell Essential Personnel this file is.
 ///
 /// The manifest's own record wins when it is present and usable. It comes from
@@ -505,7 +533,10 @@ fn content_type(filename: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{allowed, content_type, declared_type, parse_app_key, tenant_origin, tenant_url};
+    use super::{
+        allowed, content_type, declared_type, parse_app_key, sha256_hex, tenant_origin,
+        tenant_url,
+    };
 
     #[test]
     fn accepts_a_plain_company_name_and_a_pasted_address() {
@@ -620,6 +651,20 @@ mod tests {
         assert_eq!(
             declared_type(Some("application/pdf; charset=utf-8"), "scan.png"),
             "image/png"
+        );
+    }
+
+    #[test]
+    fn hashes_the_way_the_manifest_does() {
+        // The manifest records SHA-256 as lowercase hex, computed over the
+        // bytes as written. Both ends have to agree or the check is noise.
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
 }
