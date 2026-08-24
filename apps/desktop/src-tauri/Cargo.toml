@@ -22,12 +22,18 @@ tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# For checking an export file still matches the hash the manifest recorded
+# for it before that file is uploaded to a system of record.
+sha2 = "0.10"
+
 # The AI provider call is made here rather than through tauri-plugin-http.
 # That plugin's allow-list is pinned to BambooHR in capabilities/default.json
 # and cannot express a base URL the user types in at runtime. Owning the
 # request here also means the provider API key is read straight from the
 # credential store into the request and never crosses into the webview.
-reqwest = { version = "0.12", features = ["json"] }
+# `multipart` is for the Essential Personnel certificate upload: EP takes the
+# file in its own request and the record cites the URL it returns.
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 # The OS credential store: Windows Credential Manager, macOS Keychain, and
 # the Secret Service on Linux. Chosen over tauri-plugin-stronghold because

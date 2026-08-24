@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFileNameFallback, buildTrainingItems } from "../src/items.js";
+import { applyFileNameFallback, buildTrainingItems, isStableKey } from "../src/items.js";
 import type { WireTrainingType } from "../src/types.js";
 
 const cprType: WireTrainingType = {
@@ -119,5 +119,28 @@ describe("applyFileNameFallback", () => {
     });
 
     expect(applyFileNameFallback(item!, "scan001").name).toBe("CPR - BLS Provider");
+  });
+});
+
+describe("keys that are really positions", () => {
+  /**
+   * Both lists invent an id when a row carries none, and they spell it
+   * differently - `row-0` for the certifications table, `record-0` for
+   * training. Only the first was treated as positional, so a training record
+   * with no id was trusted as a stable identity: the exact hazard this check
+   * exists to catch, hiding behind a second name for the same thing.
+   */
+  it("rejects an invented id whichever list invented it", () => {
+    expect(isStableKey("certifications:row-0")).toBe(false);
+    expect(isStableKey("training:record-0")).toBe(false);
+  });
+
+  it("accepts a real id from either list", () => {
+    expect(isStableKey("training:88213")).toBe(true);
+    expect(isStableKey("certifications:4471")).toBe(true);
+  });
+
+  it("treats a key with no source as untrustworthy", () => {
+    expect(isStableKey("8821")).toBe(false);
   });
 });

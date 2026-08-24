@@ -15,6 +15,7 @@
 //!    never handed to the webview at all.
 
 mod ai;
+mod essper;
 
 use keyring::Entry;
 
@@ -80,6 +81,19 @@ fn safe_filename(filename: &str) -> Result<&str, String> {
         (Some(std::path::Component::Normal(_)), None) => Ok(filename),
         _ => Err(format!("Refusing to write to an unsafe filename: {filename}")),
     }
+}
+
+/// A path inside the export folder, guarded by `safe_filename`.
+///
+/// Shared with `essper.rs`, so a certificate about to be uploaded is subject
+/// to exactly the same rule as one being written - a filename built from
+/// BambooHR data must never reach outside the folder the user chose.
+pub(crate) fn export_file_path(
+    directory: &str,
+    filename: &str,
+) -> Result<std::path::PathBuf, String> {
+    let name = safe_filename(filename)?;
+    Ok(std::path::PathBuf::from(directory).join(name))
 }
 
 #[tauri::command]
@@ -272,7 +286,12 @@ pub fn run() {
             ai::save_ai_key,
             ai::has_ai_key,
             ai::delete_ai_key,
-            ai::ai_extract
+            ai::ai_extract,
+            essper::essper_open_login,
+            essper::essper_close_login,
+            essper::essper_session,
+            essper::essper_request,
+            essper::essper_upload_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

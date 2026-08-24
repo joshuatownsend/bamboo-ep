@@ -31,10 +31,27 @@ export interface BuildItemsInput {
  * identity: insert a row above it and the same key now names a different
  * certification.
  */
-const POSITIONAL_ID_PREFIX = "row-";
+/**
+ * Both spellings of "we had to invent this id".
+ *
+ * The certifications table and the training list each fall back to a position
+ * when a row carries no id, and they spell it differently. Only the first was
+ * being treated as positional, so a training record with no id was trusted as
+ * a stable identity - the exact hazard the check exists to catch, hiding
+ * behind a second name for the same thing.
+ *
+ * Both are listed rather than unified into one prefix: the strings appear in
+ * manifests already written, and renaming them would quietly invalidate every
+ * decision a member has saved.
+ */
+const POSITIONAL_ID_PREFIXES = ["row-", "record-"] as const;
 
 function positionalId(index: number): string {
-  return `${POSITIONAL_ID_PREFIX}${index}`;
+  return `row-${index}`;
+}
+
+function positionalRecordId(index: number): string {
+  return `record-${index}`;
 }
 
 /**
@@ -48,9 +65,25 @@ function positionalId(index: number): string {
  * relabelling this whole app exists to prevent.
  */
 export function hasStableIdentity(item: TrainingItem): boolean {
-  return !(
-    item.source === "certifications" && item.id.startsWith(POSITIONAL_ID_PREFIX)
-  );
+  return isStableKey(`${item.source}:${item.id}`);
+}
+
+/**
+ * The same test, against a manifest entry's `key` rather than a live item.
+ *
+ * Part 2 reads decisions back from a manifest written on an earlier run, and
+ * has no `TrainingItem` to hand - only `${source}:${id}`. Sharing the rule
+ * matters more than the convenience: two copies of "is this key trustworthy"
+ * is exactly how one of them ends up not being updated.
+ */
+export function isStableKey(key: string): boolean {
+  const separator = key.indexOf(":");
+  if (separator < 0) return false;
+  // Tested against the id whatever the source. A real BambooHR id is numeric,
+  // so nothing legitimate begins with either prefix - and tying the check to
+  // one source is how the training-record spelling was missed.
+  const id = key.slice(separator + 1);
+  return !POSITIONAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
 export function buildTrainingItems(input: BuildItemsInput): TrainingItem[] {
@@ -88,7 +121,7 @@ function fromRecord(
   index: number,
   types: Map<string, WireTrainingType>,
 ): TrainingItem {
-  const id = idToString(record.id) ?? `record-${index}`;
+  const id = idToString(record.id) ?? positionalRecordId(index);
   const typeId = idToString(record.type);
   const type = typeId ? types.get(typeId) : undefined;
   const typeName = cleanString(type?.name);
