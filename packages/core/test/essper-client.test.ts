@@ -293,3 +293,34 @@ describe("an empty catalogue", () => {
     );
   });
 });
+
+describe("dates Essential Personnel states but this app cannot read", () => {
+  const row = (over: Record<string, unknown>) =>
+    JSON.stringify({ total: 1, data: [{ _id: "u1", certificationTemplateId: "t1", ...over }] });
+
+  /**
+   * Reading an unparseable date as absent feeds "unknown" into the comparison
+   * that decides which record is current - so a real expiry written in an
+   * unfamiliar form silently stops counting.
+   */
+  it("refuses a differently formatted date", async () => {
+    const { fetchImpl } = stub([{ body: row({ year: "08/24/2026" }) }]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /not a date this app can read/i,
+    );
+  });
+
+  it("refuses a well-shaped impossibility", async () => {
+    const { fetchImpl } = stub([{ body: row({ expires: "2026-99-99" }) }]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /not a date this app can read/i,
+    );
+  });
+
+  it("still treats a genuinely absent date as absent", async () => {
+    const { fetchImpl } = stub([{ body: row({ year: "2020-01-02", expires: null }) }]);
+    const rows = await new EpClient(fetchImpl, BASE, KEY).listCertifications("me");
+    expect(rows[0]!.expires).toBeNull();
+    expect(rows[0]!.completed).toBe("2020-01-02");
+  });
+});

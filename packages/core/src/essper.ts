@@ -325,9 +325,9 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
   resolved.forEach((row, index) => {
     if (!row.chosen || row.outcome) return;
     const held = currentFor.get(row.chosen.id);
-    // Strictly better, so the first of equally current records wins and the
-    // order records arrive in does not change the answer.
-    if (held === undefined || currencyOfEntry(row.entry) > currencyOfEntry(resolved[held]!.entry)) {
+    // Strictly better, so the order records arrive in does not change the
+    // answer.
+    if (held === undefined || compareEntries(row.entry, resolved[held]!.entry) > 0) {
       currentFor.set(row.chosen.id, index);
     }
   });
@@ -428,24 +428,6 @@ function settled(
 }
 
 /**
- * How current a sitting of a certification is, as one comparable value.
- *
- * The single measure this file ranks everything by: Essential Personnel's own
- * rows, BambooHR's records, and two BambooHR records competing with each
- * other. Five review rounds found the same class of mistake in three separate
- * comparisons - each locally reasonable, none agreeing with the others - which
- * is what a rule implemented three times buys you.
- *
- * Completion date first, then expiry. Successive extensions of one licence all
- * carry the SAME completion date, so completion alone leaves them tied and
- * keeps whichever happened to come first, possibly the one that expired years
- * ago. Comparing the pair in that order also refuses the inverse: an older
- * record that runs longer is not more current than a later sitting, because
- * the completion dates decide before the expiries are ever reached.
- *
- * Both are fixed-width ISO days, so the joined strings compare in date order.
- */
-/**
  * Only a high-confidence match is proposed without being asked for, and only
  * when it is clearly ahead of the runner-up. Two catalogue entries scoring
  * alike means the name does not distinguish them, and picking the first is a
@@ -474,21 +456,81 @@ function item(
   return { entry, outcome, template, candidates, existing, explanation };
 }
 
-function currencyOf(completed: string | null, expires: string | null): string {
-  return `${completed ?? ""}|${expires ?? ""}`;
+/**
+ * One sitting of a certification, reduced to what decides how current it is.
+ */
+interface Sitting {
+  completed: string | null;
+  /** Only a date an issuer stated. See `sittingOfEntry`. */
+  expires: string | null;
 }
 
-function currency(row: EpUserCertification): string {
-  return currencyOf(row.completed, row.expires);
+/**
+ * The single measure this file ranks everything by: Essential Personnel's own
+ * rows, BambooHR's records, and two BambooHR records competing with each
+ * other. Five review rounds found the same class of mistake in three separate
+ * comparisons - each locally reasonable, none agreeing with the others - which
+ * is what a rule implemented three times buys you.
+ *
+ * Completion date first, then expiry. Successive extensions of one licence all
+ * carry the SAME completion date, so completion alone leaves them tied and
+ * keeps whichever happened to come first, possibly the one that expired years
+ * ago. Comparing the pair in that order also refuses the inverse: an older
+ * record that runs longer is not more current than a later sitting, because
+ * completion decides before expiry is ever reached.
+ *
+ * Compared field by field rather than as one joined string. The joined version
+ * was shorter and quietly wrong - the separator sorted above digits, so a
+ * record with no expiry outranked one that had a real expiry, and a test
+ * caught it only because an unrelated key was appended later.
+ */
+function compareSittings(a: Sitting, b: Sitting): number {
+  const byCompleted = compareDays(a.completed, b.completed);
+  return byCompleted !== 0 ? byCompleted : compareDays(a.expires, b.expires);
+}
+
+/** An unknown date is never more current than a stated one. */
+function compareDays(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  return a < b ? -1 : 1;
+}
+
+function sittingOf(row: EpUserCertification): Sitting {
+  return { completed: row.completed, expires: row.expires };
 }
 
 /**
  * A derived expiry is Part 1's arithmetic, not a date an issuer stated, and it
- * is left out of the comparison entirely. Counting it would let this app's own
- * guess decide which of two real records is the current one.
+ * is left out entirely. Counting it would let this app's own guess decide
+ * which of two real records is the current one.
  */
-function currencyOfEntry(entry: ManifestEntry): string {
-  return currencyOf(entry.completed, entry.expiresDerived ? null : entry.expires);
+function sittingOfEntry(entry: ManifestEntry): Sitting {
+  return {
+    completed: entry.completed,
+    expires: entry.expiresDerived ? null : entry.expires,
+  };
+}
+
+/**
+ * How two BambooHR records for one certification are ranked against each other.
+ *
+ * Currency first, then whether the record actually has a certificate. The
+ * second key only ever breaks a tie - a file can never make a stale record
+ * beat a current one - but when two records describe the very same sitting, as
+ * the certifications table and the training list routinely do, only one of
+ * them was given the file during the export. Preferring the empty one reports
+ * "no certificate found" while the certificate sits on the record beside it.
+ *
+ * Deliberately not part of `compareSittings`, which also compares against
+ * Essential Personnel's rows. Those carry no such flag, so including it there
+ * would make every record with a file look newer than what EP already holds.
+ */
+function compareEntries(a: ManifestEntry, b: ManifestEntry): number {
+  const bySitting = compareSittings(sittingOfEntry(a), sittingOfEntry(b));
+  if (bySitting !== 0) return bySitting;
+  return Number(!!a.file) - Number(!!b.file);
 }
 
 /** The most current EP row for a template, if there is one. */
@@ -498,7 +540,9 @@ function newestFor(
 ): EpUserCertification | null {
   const rows = existing.filter((row) => row.templateId === templateId);
   if (rows.length === 0) return null;
-  return rows.reduce((newest, row) => (currency(row) > currency(newest) ? row : newest));
+  return rows.reduce((newest, row) =>
+    compareSittings(sittingOf(row), sittingOf(newest)) > 0 ? row : newest,
+  );
 }
 
 /**
@@ -517,7 +561,7 @@ function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boole
   // a renewal, and inventing one uploads a second copy of something already
   // present.
   if (!entry.completed || !existing.completed) return false;
-  return currencyOfEntry(entry) > currency(existing);
+  return compareSittings(sittingOfEntry(entry), sittingOf(existing)) > 0;
 }
 
 /** What a single upload sends. Assembled here so the shape is testable. */

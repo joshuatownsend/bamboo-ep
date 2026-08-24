@@ -671,3 +671,52 @@ describe("choosing between two BambooHR records for one certification", () => {
     expect(backwards.items.find((i) => i.outcome === "ready")!.entry.key).toBe("certifications:9");
   });
 });
+
+describe("two records for the same sitting, one of which has the certificate", () => {
+  /**
+   * Part 1 assigns a certificate to exactly one record. When the certifications
+   * table and the training list describe the same sitting - same completion,
+   * same expiry - preferring whichever came first reports "no certificate
+   * found" while the certificate sits on the record beside it.
+   */
+  it("prefers the record that has the file when everything else ties", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", file: null }),
+        entry({ key: "certifications:9" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+  });
+
+  it("does not let a file make a stale record beat a current one", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15" }),
+        entry({ key: "certifications:9", completed: "2024-06-01", file: null }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "noFile"]);
+  });
+
+  /**
+   * The comparison used to join its fields into one string, and the separator
+   * sorted above digits - so a record with NO expiry outranked one that had a
+   * real expiry. Comparing field by field is what removes that class.
+   */
+  it("ranks a stated expiry above no expiry at all", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", expires: null }),
+        entry({ key: "certifications:9", expires: "2028-04-15" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+  });
+});

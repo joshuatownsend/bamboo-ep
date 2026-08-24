@@ -334,8 +334,8 @@ function toCertification(row: Record<string, unknown>): EpUserCertification {
   return {
     id: stringOf(row["_id"]) ?? "",
     templateId: templateId ?? "",
-    completed: isoDate(row["year"]),
-    expires: isoDate(row["expires"]),
+    completed: isoDate(row["year"], "completion date"),
+    expires: isoDate(row["expires"], "expiry date"),
     institution: stringOf(row["school"]),
     documentUrl: stringOf(row["documentUrl"]),
     importedFrom: source ? stringOf(source["source"]) : null,
@@ -346,12 +346,33 @@ function toCertification(row: Record<string, unknown>): EpUserCertification {
  * EP returns dates as full ISO timestamps in some places and `YYYY-MM-DD` in
  * others. Everything downstream compares dates as plain days, so both are
  * reduced to that rather than left for each caller to handle differently.
+ *
+ * A value EP states but this app cannot read is NOT an absent date. Returning
+ * null for it would feed "unknown" into the comparison that decides which
+ * record is the current one - so a real expiry written in an unfamiliar form
+ * would silently stop counting, and the credential it belongs to would be
+ * ranked as though it had never been given one.
  */
-function isoDate(value: unknown): string | null {
+function isoDate(value: unknown, field: string): string | null {
   const text = stringOf(value);
   if (!text) return null;
-  const match = /^(\d{4}-\d{2}-\d{2})/.exec(text);
-  return match ? match[1]! : null;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  const day = match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  // Round-tripped, so that a well-shaped impossibility like 2026-99-99 is
+  // caught as well as a differently-formatted one like 08/24/2026.
+  const parsed = day ? new Date(`${day}T00:00:00Z`) : null;
+  if (!day || !parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
+    throw new EpApiError({
+      status: 200,
+      path: "/user-certifications",
+      message:
+        `Essential Personnel gave "${text}" as the ${field} of one of your certifications, ` +
+        "which is not a date this app can read. Refusing to continue, because comparing " +
+        "your records against it would give the wrong answer.",
+    });
+  }
+  return day;
 }
 
 function stringOf(value: unknown): string | null {
