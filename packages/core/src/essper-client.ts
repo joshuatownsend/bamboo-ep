@@ -106,16 +106,26 @@ export class EpClient {
       });
     }
     const rows = body.templates;
-    return rows.flatMap((row) => {
+    return rows.map((row) => {
       const record = asRecord(row);
       const id = stringOf(record?.["_id"]);
       const name = stringOf(record?.["name"]);
-      // A template with no id cannot be submitted and a nameless one cannot be
-      // matched or shown. Dropping them beats carrying an entry that fails at
-      // the point of upload.
-      return id && name
-        ? [{ id, name, abbreviation: stringOf(record?.["abbreviation"]) }]
-        : [];
+      if (!id || !name) {
+        // Dropping the row was the earlier behaviour, and it hid the case that
+        // matters: if a schema change affects every row, the catalogue comes
+        // back empty and every record is told that nothing in Essential
+        // Personnel resembles it - a confident answer, produced by having
+        // nothing to compare against.
+        throw new EpApiError({
+          status: 200,
+          path: "/template/certification/all",
+          message:
+            "Essential Personnel's list of certifications contains an entry this app " +
+            "cannot read. Refusing to continue, because matching against an incomplete " +
+            "list would report certifications as missing when they are not.",
+        });
+      }
+      return { id, name, abbreviation: stringOf(record?.["abbreviation"]) };
     });
   }
 

@@ -46,12 +46,16 @@ describe("reading the catalogue", () => {
     expect(calls[0]!.headers["X-ES-KEY"]).toBe(KEY);
   });
 
-  it("drops a template with no id, which could never be submitted", async () => {
+  it("refuses a catalogue containing an entry it cannot read", async () => {
+    // Dropping the row hides the case that matters: a schema change affecting
+    // every row leaves an empty catalogue, and every record is then told that
+    // nothing in EP resembles it.
     const { fetchImpl } = stub([
       { body: JSON.stringify({ templates: [{ name: "Nameless" }, { _id: "t2", name: "CPR" }] }) },
     ]);
-    const templates = await new EpClient(fetchImpl, BASE, KEY).listTemplates();
-    expect(templates.map((t) => t.id)).toEqual(["t2"]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listTemplates()).rejects.toThrow(
+      /cannot read/i,
+    );
   });
 });
 
