@@ -369,30 +369,70 @@ describe("the catalogue request list", () => {
 });
 
 describe("what a submission carries", () => {
-  it("sends the record's own dates and institution", () => {
+  it("sends the record's own dates", () => {
     const plan = buildEpPlan({ entries: [entry()], templates: CATALOGUE, existing: noExisting });
-    const submission = submissionFor(plan.items[0]!)!;
-    expect(submission).toMatchObject({
+    expect(submissionFor(plan.items[0]!)!).toMatchObject({
       templateId: "t-metro-100",
       completed: "2018-04-15",
       expires: null,
-      institution: "Washington Metropolitan Area Transit Authority",
     });
   });
 
   /**
-   * Part 1 derives an expiry from the training type's renewal frequency when
-   * BambooHR does not state one. That is this app's arithmetic, not a fact an
-   * issuer asserted, and writing it into the system of record would launder a
-   * guess into a date someone later staffs against.
+   * EP labels this field "Institution Name" and BambooHR's instructor is a
+   * person - "Jane Smith" is not the body that issued a certification. What
+   * belongs here is still open in the plan document, and writing a name into
+   * the system of record while it is open would answer the question wrongly.
    */
-  it("never sends a derived expiry", () => {
+  it("does not pass an instructor off as the institution", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ instructor: "Jane Smith" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(submissionFor(plan.items[0]!)!.institution).toBeNull();
+  });
+
+  /**
+   * Part 1 calculates an expiry from the renewal frequency when BambooHR
+   * states none. Sending that date would launder this app's arithmetic into
+   * the system of record - but sending nothing is worse, because EP reads a
+   * blank as "never expires" and would mark a renewable credential
+   * permanently valid. Neither is the tool's call, so the record is held.
+   */
+  it("holds a record whose expiry this app calculated", () => {
     const plan = buildEpPlan({
       entries: [entry({ expires: "2030-01-01", expiresDerived: true })],
       templates: CATALOGUE,
       existing: noExisting,
     });
-    expect(submissionFor(plan.items[0]!)!.expires).toBeNull();
+    expect(plan.items[0]!.outcome).toBe("expiryNotStated");
+    expect(plan.items[0]!.explanation).toMatch(/never expiring/i);
+    expect(submissionFor(plan.items[0]!)).toBeNull();
+  });
+
+  it("refuses to submit one even if it reaches here marked ready", () => {
+    // The planner holds these, but this function decides what is actually
+    // sent, and "never expires" is not a value to arrive at by omission.
+    const plan = buildEpPlan({ entries: [entry()], templates: CATALOGUE, existing: noExisting });
+    const ready = plan.items[0]!;
+    expect(
+      submissionFor({
+        ...ready,
+        entry: { ...ready.entry, expires: "2030-01-01", expiresDerived: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("reports a missing certificate before an unconfirmed expiry", () => {
+    // A record with no certificate cannot be uploaded whatever its expiry, and
+    // the transcript is the actionable answer.
+    const plan = buildEpPlan({
+      entries: [entry({ file: null, expires: "2030-01-01", expiresDerived: true })],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items[0]!.outcome).toBe("noFile");
   });
 
   it("refuses to build a submission for anything not ready", () => {

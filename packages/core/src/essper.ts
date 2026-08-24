@@ -78,6 +78,7 @@ export type EpOutcome =
   | "alreadyInEp"
   | "importedByTargetSolutions"
   | "needsTriage"
+  | "expiryNotStated"
   | "duplicateInPlan"
   | "noCompletionDate"
   | "skipped"
@@ -401,6 +402,32 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
       );
     }
 
+    // Part 1 calculates an expiry from the training type's renewal frequency
+    // when BambooHR states none. Neither way of submitting one is safe:
+    //
+    //   - Sending the date writes this app's arithmetic into the system of
+    //     record as though an issuer had stated it.
+    //   - Sending nothing is WORSE. Essential Personnel reads a blank expiry
+    //     as "never expires", so a renewable credential would be recorded as
+    //     permanently valid.
+    //
+    // So the record is held, and the member settles it. The mechanism for
+    // them to answer belongs with the review screen that will ask the
+    // question - designing it here, with nothing to design it against, is
+    // what this outcome deliberately defers.
+    if (row.entry.expiresDerived && row.entry.expires) {
+      return item(
+        row.entry,
+        "expiryNotStated",
+        row.chosen,
+        row.candidates,
+        already,
+        `BambooHR does not record an expiry for this. ${row.entry.expires} is calculated ` +
+          "from the renewal frequency, so it needs confirming before it can be submitted - " +
+          "Essential Personnel treats a blank expiry as never expiring.",
+      );
+    }
+
     return item(
       row.entry,
       "ready",
@@ -587,14 +614,22 @@ export function submissionFor(item: EpPlanItem): EpSubmission | null {
   if (item.outcome !== "ready" || !item.template || !item.entry.file || !item.entry.completed) {
     return null;
   }
+  // Checked here as well as in the planner, because this function decides what
+  // is actually sent and "never expires" is not a value to arrive at by
+  // omission.
+  if (item.entry.expiresDerived && item.entry.expires) return null;
   return {
     templateId: item.template.id,
     completed: item.entry.completed,
-    // A derived expiry is this app's arithmetic, not something an issuer
-    // stated. Writing it into the system of record would launder a guess into
-    // a fact, and EP treats a blank as "never" rather than "unknown".
-    expires: item.entry.expiresDerived ? null : item.entry.expires,
-    institution: item.entry.instructor,
+    // Non-null by construction for a derived expiry: those records are held
+    // at "expiryNotStated" and never reach here.
+    expires: item.entry.expires,
+    // Deliberately not `entry.instructor`. Essential Personnel labels this
+    // field "Institution Name", and BambooHR's instructor is a person - "Jane
+    // Smith" is not the body that issued a certification. What belongs here is
+    // still an open question in docs/part-2-plan.md, and writing a name into
+    // the system of record while it is open would answer it wrongly.
+    institution: null,
     savedAs: item.entry.file.savedAs,
   };
 }
