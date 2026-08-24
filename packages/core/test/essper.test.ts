@@ -542,3 +542,32 @@ describe("catalogue entries hidden behind an abbreviation", () => {
     expect(match.confidence).toBe("high");
   });
 });
+
+describe("choosing which EP row to compare against", () => {
+  /**
+   * Successive extensions of one licence all carry the same completion date,
+   * so comparing that alone leaves every row tied - and the comparison then
+   * keeps whichever EP happened to return first, which may be the one that
+   * expired years ago.
+   */
+  it("prefers the row that runs longest when completion dates tie", () => {
+    const row = (id: string, expires: string): EpUserCertification => ({
+      id,
+      templateId: "t-metro-100",
+      completed: "2018-04-15",
+      expires,
+      institution: null,
+      documentUrl: null,
+      importedFrom: null,
+    });
+    const plan = buildEpPlan({
+      entries: [entry({ completed: "2018-04-15", expires: "2026-04-15" })],
+      templates: CATALOGUE,
+      // The stale row comes first. Comparing against it would call this record
+      // a renewal and upload a credential EP already holds a current copy of.
+      existing: [row("old", "2020-04-15"), row("current", "2028-04-15")],
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
+    expect(plan.items[0]!.existing!.id).toBe("current");
+  });
+});

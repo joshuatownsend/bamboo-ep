@@ -442,16 +442,27 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
 }
 
 
-/** The most recently completed EP row for a template, if there is one. */
+/**
+ * How current an EP row is, as one comparable value.
+ *
+ * Completion date first, then expiry. Successive extensions of one licence all
+ * carry the SAME completion date, so comparing that alone leaves every row
+ * tied and keeps whichever EP happened to return first - which may be the one
+ * that expired years ago. Both dates are fixed-width ISO days, so comparing
+ * them joined compares them in order.
+ */
+function currency(row: EpUserCertification): string {
+  return `${row.completed ?? ""}|${row.expires ?? ""}`;
+}
+
+/** The most current EP row for a template, if there is one. */
 function newestFor(
   existing: readonly EpUserCertification[],
   templateId: string,
 ): EpUserCertification | null {
   const rows = existing.filter((row) => row.templateId === templateId);
   if (rows.length === 0) return null;
-  return rows.reduce((newest, row) =>
-    (row.completed ?? "") > (newest.completed ?? "") ? row : newest,
-  );
+  return rows.reduce((newest, row) => (currency(row) > currency(newest) ? row : newest));
 }
 
 /**

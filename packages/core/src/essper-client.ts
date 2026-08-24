@@ -105,6 +105,19 @@ export class EpClient {
           "certifications.",
       });
     }
+    if (body.templates.length === 0) {
+      // Structurally valid and still wrong. LC-CFRS's catalogue holds hundreds
+      // of entries, so an empty one means a permission or API change rather
+      // than an organisation that tracks no certifications - and it would send
+      // every record to triage reporting that nothing in EP resembles it.
+      throw new EpApiError({
+        status: 200,
+        path: "/template/certification/all",
+        message:
+          "Essential Personnel returned no certifications at all. Refusing to continue, " +
+          "because every record would be reported as having no match.",
+      });
+    }
     const rows = body.templates;
     return rows.map((row) => {
       const record = asRecord(row);

@@ -279,3 +279,17 @@ describe("knowing whether the list is complete", () => {
     );
   });
 });
+
+describe("an empty catalogue", () => {
+  /**
+   * Structurally valid and still wrong. LC-CFRS's catalogue holds hundreds of
+   * entries, so an empty one means a permission or API change - and every
+   * record would be told nothing in EP resembles it.
+   */
+  it("is refused rather than matched against", async () => {
+    const { fetchImpl } = stub([{ body: JSON.stringify({ templates: [] }) }]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listTemplates()).rejects.toThrow(
+      /no certifications at all/i,
+    );
+  });
+});
