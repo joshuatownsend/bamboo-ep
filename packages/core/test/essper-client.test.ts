@@ -187,4 +187,18 @@ describe("creating the record", () => {
       documentUrl: "https://lccfrs.essper.com/file/hash.pdf",
     });
   });
+  it("refuses to report success when EP confirms no id", async () => {
+    // An empty id would be indistinguishable from success, and the caller
+    // would tell the member a certification was uploaded on the strength of a
+    // response that never said one was created.
+    const { fetchImpl } = stub([{ body: JSON.stringify({ ok: true }) }]);
+    await expect(
+      new EpClient(fetchImpl, BASE, KEY).createCertification({
+        userId: "me",
+        certificationTemplateId: "t1",
+        year: "2018-04-15",
+        expires: null,
+      }),
+    ).rejects.toThrow(/did not confirm/i);
+  });
 });

@@ -236,6 +236,138 @@ describe("decisions the member has already made", () => {
   });
 });
 
+describe("renewals are not duplicates", () => {
+  /**
+   * Certifications expire and are retaken. Reported by review: an older CPR
+   * row in EP made the member's renewed one look like a duplicate, leaving the
+   * system of record showing an expired credential.
+   */
+  it("uploads a record completed later than the one EP holds", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ completed: "2024-06-01" })],
+      templates: CATALOGUE,
+      existing: [
+        {
+          id: "u1",
+          templateId: "t-metro-100",
+          completed: "2018-04-15",
+          expires: null,
+          institution: null,
+          documentUrl: null,
+          importedFrom: null,
+        },
+      ],
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+    expect(plan.items[0]!.explanation).toMatch(/renews the 2018-04-15 record/i);
+  });
+
+  it("compares against the newest row when EP holds several", () => {
+    const row = (id: string, completed: string) => ({
+      id,
+      templateId: "t-metro-100",
+      completed,
+      expires: null,
+      institution: null,
+      documentUrl: null,
+      importedFrom: null,
+    });
+    const plan = buildEpPlan({
+      entries: [entry({ completed: "2020-01-01" })],
+      templates: CATALOGUE,
+      // The 2022 sitting is the current one; checking against the 2018 row
+      // would call this stale record a renewal and upload it.
+      existing: [row("u1", "2018-04-15"), row("u2", "2022-09-09")],
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
+  });
+
+  it("does not invent a renewal when either date is unknown", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ completed: null })],
+      templates: CATALOGUE,
+      existing: [
+        {
+          id: "u1",
+          templateId: "t-metro-100",
+          completed: null,
+          expires: null,
+          institution: null,
+          documentUrl: null,
+          importedFrom: null,
+        },
+      ],
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
+  });
+});
+
+describe("decisions keyed by a row's position", () => {
+  /**
+   * A certifications row with no id is keyed by where it sat in BambooHR's
+   * response. Reorder the rows and the same key names a different
+   * certification - so a remembered "skip" could silently drop a credential
+   * the member never skipped. Part 1 has the same guard.
+   */
+  it("ignores a remembered skip on a positional key", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ key: "certifications:row-0" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "certifications:row-0": { kind: "skip" } },
+    });
+    expect(plan.items[0]!.outcome).not.toBe("skipped");
+  });
+
+  it("ignores a remembered template on a positional key", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ key: "certifications:row-3", name: "Unplaceable name" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "certifications:row-3": { kind: "template", templateId: "t-forklift" } },
+    });
+    expect(plan.items[0]!.template).toBeNull();
+  });
+
+  it("still honours a decision on a real certifications id", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ key: "certifications:8821" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "certifications:8821": { kind: "skip" } },
+    });
+    expect(plan.items[0]!.outcome).toBe("skipped");
+  });
+});
+
+describe("the catalogue request list", () => {
+  it("drops BambooHR's source tag, which means nothing to the reader", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ key: "training:vrs", name: "[SWP] Volunteer Recruit School" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:vrs": { kind: "request" } },
+    });
+    expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
+  });
+
+  it("names a certification once even when two records ask for it", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:a", name: "[SWP] Volunteer Recruit School" }),
+        entry({ key: "training:b", name: "Volunteer Recruit School" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: {
+        "training:a": { kind: "request" },
+        "training:b": { kind: "request" },
+      },
+    });
+    expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
+  });
+});
+
 describe("what a submission carries", () => {
   it("sends the record's own dates and institution", () => {
     const plan = buildEpPlan({ entries: [entry()], templates: CATALOGUE, existing: noExisting });

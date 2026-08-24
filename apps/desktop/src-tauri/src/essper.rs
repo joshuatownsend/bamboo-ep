@@ -100,6 +100,34 @@ fn tenant_origin(tenant: &str) -> Result<String, String> {
     Ok(format!("https://{label}.essper.com"))
 }
 
+/// The only endpoints this tool has any business calling.
+///
+/// A generic "any rooted path" bridge was the earlier design, and refusing PUT
+/// and DELETE was not enough of a limit: an authenticated POST to an arbitrary
+/// endpoint is a large surface to leave open, and it contradicts what this
+/// tool claims to be - something that adds certifications and reads only what
+/// it needs to do that safely.
+const ALLOWED_GET: &[&str] = &[
+    "/api/user/me",
+    "/api/template/certification/all",
+    "/api/certifications/settings",
+    "/api/user-certifications",
+];
+const ALLOWED_POST: &[&str] = &["/api/user-certifications"];
+
+fn allowed(method: &reqwest::Method, path: &str) -> bool {
+    // Compared against the path alone: `/api/user-certifications?userId=...`
+    // is the same endpoint as `/api/user-certifications`, and a query string
+    // cannot turn one endpoint into another.
+    let endpoint = path.split('?').next().unwrap_or("");
+    let list = if method == reqwest::Method::GET {
+        ALLOWED_GET
+    } else {
+        ALLOWED_POST
+    };
+    list.contains(&endpoint)
+}
+
 /// A rooted path on the tenant host, and nothing else.
 fn tenant_url(tenant: &str, path: &str) -> Result<String, String> {
     // `//evil.example` is protocol-relative and would resolve to another host;
@@ -168,6 +196,39 @@ fn session_cookies(app: &tauri::AppHandle, tenant: &str) -> Result<String, Strin
         .join("; "))
 }
 
+/// The tenant's public application key, from the `config.js` that Essential
+/// Personnel serves to every browser.
+///
+/// Their API expects an `X-ES-KEY` header identifying the application
+/// alongside the session cookie. It is read at runtime rather than compiled
+/// in, because it differs per tenant and can be rotated. It is not a secret
+/// and grants nothing on its own - a request carrying it without a session is
+/// still refused.
+async fn app_key(tenant: &str) -> Result<String, String> {
+    let url = format!("{}/config.js", tenant_origin(tenant)?);
+    let body = client()?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Essential Personnel: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Could not read the Essential Personnel settings: {e}"))?;
+
+    parse_app_key(&body).ok_or_else(|| {
+        format!("Could not find the application key at {url}. Check the company name.")
+    })
+}
+
+fn parse_app_key(config_js: &str) -> Option<String> {
+    let after_name = config_js.split_once("\"API_KEY\"")?.1;
+    let after_colon = after_name.split_once(':')?.1;
+    let start = after_colon.find('"')? + 1;
+    let end = start + after_colon[start..].find('"')?;
+    let key = &after_colon[start..end];
+    (!key.is_empty()).then(|| key.to_string())
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
@@ -211,10 +272,16 @@ pub async fn essper_request(
         // should be able to do by accident, or be talked into doing.
         other => return Err(format!("{other} requests are not allowed.")),
     };
+    if !allowed(&method, &path) {
+        return Err(format!(
+            "{method} {path} is not one of the endpoints this app uses."
+        ));
+    }
 
     let mut request = client()?
         .request(method, &url)
         .header("Cookie", cookies)
+        .header("X-ES-KEY", app_key(&tenant).await?)
         .header("Accept", "application/json");
 
     if let Some(json) = body {
@@ -269,12 +336,13 @@ pub async fn essper_upload_file(
 
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename.clone())
-        .mime_str("application/pdf")
+        .mime_str(content_type(&filename))
         .map_err(|e| format!("Could not prepare \"{filename}\" for upload: {e}"))?;
 
     let response = client()?
         .post(tenant_url(&tenant, "/api/file/new")?)
         .header("Cookie", cookies)
+        .header("X-ES-KEY", app_key(&tenant).await?)
         .header("Accept", "application/json")
         // No Content-Type header: reqwest sets it with the multipart boundary,
         // and setting it here would replace that with an unparseable one.
@@ -291,9 +359,34 @@ pub async fn essper_upload_file(
     })
 }
 
+/// What kind of file this is, from its name.
+///
+/// Not every certificate is a PDF: BambooHR holds photographed and scanned
+/// cards, and Part 1 saves whatever it was given under its original extension.
+/// Declaring a JPEG as `application/pdf` invites Essential Personnel to reject
+/// it, or to serve it back later as something it is not.
+fn content_type(filename: &str) -> &'static str {
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "pdf" => "application/pdf",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "tif" | "tiff" => "image/tiff",
+        // Deliberately generic rather than a guess. An honest unknown is
+        // handled routinely; a confident wrong type is not.
+        _ => "application/octet-stream",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{tenant_origin, tenant_url};
+    use super::{allowed, content_type, parse_app_key, tenant_origin, tenant_url};
 
     #[test]
     fn accepts_a_plain_company_name_and_a_pasted_address() {
@@ -344,5 +437,44 @@ mod tests {
                 "expected {hostile:?} to be refused"
             );
         }
+    }
+
+    #[test]
+    fn only_the_endpoints_this_app_actually_uses() {
+        assert!(allowed(&reqwest::Method::GET, "/api/user/me"));
+        assert!(allowed(
+            &reqwest::Method::GET,
+            "/api/user-certifications?userId=abc&skip=0"
+        ));
+        assert!(allowed(&reqwest::Method::POST, "/api/user-certifications"));
+
+        // Being allowed to read something is not a licence to write it, and
+        // neither is a licence to call anything else.
+        assert!(!allowed(&reqwest::Method::POST, "/api/user/me"));
+        assert!(!allowed(&reqwest::Method::GET, "/api/user/all"));
+        assert!(!allowed(&reqwest::Method::POST, "/api/profile-update"));
+    }
+
+    #[test]
+    fn declares_the_kind_of_file_it_is_actually_sending() {
+        assert_eq!(content_type("cert.pdf"), "application/pdf");
+        assert_eq!(content_type("CERT.PDF"), "application/pdf");
+        assert_eq!(content_type("scan.JPEG"), "image/jpeg");
+        assert_eq!(content_type("card.png"), "image/png");
+        assert_eq!(content_type("no-extension"), "application/octet-stream");
+        assert_eq!(content_type("thing.docx"), "application/octet-stream");
+    }
+
+    #[test]
+    fn reads_the_application_key_out_of_config_js() {
+        let config = r#"window.__EP_CONFIG__ = {
+            "API_URL": "https://lccfrs.essper.com/api",
+            "API_KEY_HEADER": "X-ES-KEY",
+            "API_KEY": "abc123",
+            "IS_CJIS": false
+        };"#;
+        assert_eq!(parse_app_key(config).as_deref(), Some("abc123"));
+        assert_eq!(parse_app_key("window.__EP_CONFIG__ = {};"), None);
+        assert_eq!(parse_app_key(r#"{"API_KEY": ""}"#), None);
     }
 }

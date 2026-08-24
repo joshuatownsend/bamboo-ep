@@ -48,9 +48,23 @@ function positionalId(index: number): string {
  * relabelling this whole app exists to prevent.
  */
 export function hasStableIdentity(item: TrainingItem): boolean {
-  return !(
-    item.source === "certifications" && item.id.startsWith(POSITIONAL_ID_PREFIX)
-  );
+  return isStableKey(`${item.source}:${item.id}`);
+}
+
+/**
+ * The same test, against a manifest entry's `key` rather than a live item.
+ *
+ * Part 2 reads decisions back from a manifest written on an earlier run, and
+ * has no `TrainingItem` to hand - only `${source}:${id}`. Sharing the rule
+ * matters more than the convenience: two copies of "is this key trustworthy"
+ * is exactly how one of them ends up not being updated.
+ */
+export function isStableKey(key: string): boolean {
+  const separator = key.indexOf(":");
+  if (separator < 0) return false;
+  const source = key.slice(0, separator);
+  const id = key.slice(separator + 1);
+  return !(source === "certifications" && id.startsWith(POSITIONAL_ID_PREFIX));
 }
 
 export function buildTrainingItems(input: BuildItemsInput): TrainingItem[] {

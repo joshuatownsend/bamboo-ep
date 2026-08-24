@@ -13,6 +13,7 @@
  */
 
 import type { ManifestEntry } from "./manifest.js";
+import { isStableKey } from "./items.js";
 import { tokenOverlap, tokenize, compareNumbers } from "./matching.js";
 
 /** One entry in EP's certification catalogue, from `/template/certification/all`. */
@@ -236,7 +237,13 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
   const catalogueRequests: string[] = [];
 
   for (const entry of input.entries) {
-    const decision = decisions[entry.key];
+    // A certifications row with no id of its own is keyed by where it sat in
+    // BambooHR's response. Reorder the rows and that key names a different
+    // certification - so honouring a remembered decision under it could skip a
+    // credential the member never skipped, or file one under the template that
+    // previously occupied the slot. Part 1 learned this the hard way; the rule
+    // is shared rather than restated.
+    const decision = isStableKey(entry.key) ? decisions[entry.key] : undefined;
     const candidates = rankTemplates(entry.name, input.templates);
 
     if (decision?.kind === "skip") {
@@ -247,7 +254,12 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     }
 
     if (decision?.kind === "request") {
-      catalogueRequests.push(entry.name);
+      // Without the tag: this list becomes an email to the training captain
+      // naming certifications to add, and "[TS] " is BambooHR's own bookkeeping
+      // - meaningless to the reader, and enough to make one certification look
+      // like two.
+      const requested = withoutSourcePrefix(entry.name);
+      if (!catalogueRequests.includes(requested)) catalogueRequests.push(requested);
       items.push(
         item(entry, "requested", null, candidates, null, "Queued to request as a new EP category."),
       );
@@ -277,8 +289,12 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
 
     // Dedupe AFTER a template is settled: "already there" is a statement about
     // the catalogue entry, and asking it of an unmatched record is meaningless.
-    const already = input.existing.find((row) => row.templateId === chosen.id);
-    if (already) {
+    //
+    // The newest row wins the comparison. EP can hold several rows for one
+    // certification - a member recertifies - and checking against an older one
+    // would call a genuine renewal a duplicate.
+    const already = newestFor(input.existing, chosen.id);
+    if (already && !isRenewalOf(entry, already)) {
       const outcome = already.importedFrom ? "importedByTargetSolutions" : "alreadyInEp";
       items.push(
         item(
@@ -312,10 +328,51 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
       continue;
     }
 
-    items.push(item(entry, "ready", chosen, candidates, null, reasonFor(chosen, candidates)));
+    items.push(
+      item(
+        entry,
+        "ready",
+        chosen,
+        candidates,
+        already,
+        already
+          ? `Renews the ${already.completed} record already in EP. ` +
+            reasonFor(chosen, candidates)
+          : reasonFor(chosen, candidates),
+      ),
+    );
   }
 
   return { items, catalogueRequests };
+}
+
+
+/** The most recently completed EP row for a template, if there is one. */
+function newestFor(
+  existing: readonly EpUserCertification[],
+  templateId: string,
+): EpUserCertification | null {
+  const rows = existing.filter((row) => row.templateId === templateId);
+  if (rows.length === 0) return null;
+  return rows.reduce((newest, row) =>
+    (row.completed ?? "") > (newest.completed ?? "") ? row : newest,
+  );
+}
+
+/**
+ * Is this record a later sitting of what EP already holds?
+ *
+ * Certifications expire and are retaken. Treating every row with the same
+ * template as "already there" leaves the system of record showing an expired
+ * credential while the member holds a current one - precisely what the General
+ * Order exists to prevent.
+ *
+ * Both dates must be known: with no evidence of a renewal, assuming one would
+ * upload a second copy of something already present.
+ */
+function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boolean {
+  if (!entry.completed || !existing.completed) return false;
+  return entry.completed > existing.completed;
 }
 
 /**

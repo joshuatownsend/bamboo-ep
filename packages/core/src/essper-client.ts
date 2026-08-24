@@ -177,7 +177,20 @@ export class EpClient {
       "/user-certifications",
     );
     const record = asRecord(created["data"]) ?? created;
-    return stringOf(record["_id"]) ?? "";
+    const id = stringOf(record["_id"]);
+    if (!id) {
+      // An empty string here would be indistinguishable from success, and the
+      // caller would go on to report a certification as uploaded on the
+      // strength of a response that never confirmed one was created.
+      throw new EpApiError({
+        status: res.status,
+        path: "/user-certifications",
+        message:
+          "Essential Personnel accepted the certification but did not confirm it was " +
+          "created. Check your profile before submitting it again.",
+      });
+    }
+    return id;
   }
 
   private async getJson<T>(path: string): Promise<T> {
