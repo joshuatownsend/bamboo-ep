@@ -264,20 +264,12 @@ export interface BuildEpPlanInput {
 export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
   const decisions = input.decisions ?? {};
   const byTemplateId = new Map(input.templates.map((t) => [t.id, t]));
-  const items: EpPlanItem[] = [];
   const catalogueRequests: string[] = [];
-  /**
-   * Templates this plan has already decided to upload, and where.
-   *
-   * The EP snapshot says what was there before this run; it cannot say what
-   * this run has queued. BambooHR concatenates the certifications table and
-   * the training list, so one real certification often appears in both - and
-   * without this, each copy checks the same untouched snapshot, finds nothing,
-   * and both are uploaded.
-   */
-  const queued = new Map<string, number>();
 
-  for (const entry of input.entries) {
+  // Settled first, for every record, before anything is compared. Which
+  // certification a record IS has to be known before which of several records
+  // is the current one can be asked.
+  const resolved = input.entries.map((entry) => {
     // A certifications row with no id of its own is keyed by where it sat in
     // BambooHR's response. Reorder the rows and that key names a different
     // certification - so honouring a remembered decision under it could skip a
@@ -288,10 +280,7 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     const candidates = rankTemplates(entry.name, input.templates);
 
     if (decision?.kind === "skip") {
-      items.push(
-        item(entry, "skipped", null, candidates, null, "You marked this as not tracked by LC-CFRS."),
-      );
-      continue;
+      return settled(entry, candidates, "skipped", null, "You marked this as not tracked by LC-CFRS.");
     }
 
     if (decision?.kind === "request") {
@@ -301,10 +290,7 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
       // like two.
       const requested = withoutSourcePrefix(entry.name);
       if (!catalogueRequests.includes(requested)) catalogueRequests.push(requested);
-      items.push(
-        item(entry, "requested", null, candidates, null, "Queued to request as a new EP category."),
-      );
-      continue;
+      return settled(entry, candidates, "requested", null, "Queued to request as a new EP category.");
     }
 
     const chosen =
@@ -313,202 +299,152 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
         : bestAutomatic(candidates);
 
     if (!chosen) {
-      items.push(
-        item(
-          entry,
-          "needsTriage",
-          null,
-          candidates,
-          null,
-          candidates.length > 0
-            ? "No confident match. Pick one below, request it as a new category, or mark it as not tracked."
-            : "Nothing in EP's catalogue resembles this. Request it, or mark it as not tracked.",
-        ),
+      return settled(
+        entry,
+        candidates,
+        "needsTriage",
+        null,
+        candidates.length > 0
+          ? "No confident match. Pick one below, request it as a new category, or mark it as not tracked."
+          : "Nothing in EP's catalogue resembles this. Request it, or mark it as not tracked.",
       );
-      continue;
     }
 
-    // Dedupe AFTER a template is settled: "already there" is a statement about
-    // the catalogue entry, and asking it of an unmatched record is meaningless.
-    //
-    // The newest row wins the comparison. EP can hold several rows for one
-    // certification - a member recertifies - and checking against an older one
-    // would call a genuine renewal a duplicate.
-    const already = newestFor(input.existing, chosen.id);
-    if (already && !isRenewalOf(entry, already)) {
-      const outcome = already.importedFrom ? "importedByTargetSolutions" : "alreadyInEp";
-      items.push(
-        item(
-          entry,
-          outcome,
-          chosen,
-          candidates,
-          already,
-          already.importedFrom
-            ? `Already in EP, imported from ${already.importedFrom}. The General Order says not to re-upload these.`
-            : "Already on your EP profile.",
-        ),
+    return { entry, candidates, chosen, outcome: null as EpOutcome | null, explanation: "" };
+  });
+
+  // Which record is the current sitting of each certification.
+  //
+  // BambooHR concatenates the certifications table and the training list, so
+  // one real certification often appears in both. This is decided ONCE, for
+  // every competing record at the same time, using the same measure of
+  // currency that EP's own rows are ranked by. Deciding it pairwise as records
+  // streamed past was how a stale row kept winning: each comparison was
+  // locally reasonable and the set as a whole was not.
+  const currentFor = new Map<string, number>();
+  resolved.forEach((row, index) => {
+    if (!row.chosen || row.outcome) return;
+    const held = currentFor.get(row.chosen.id);
+    // Strictly better, so the first of equally current records wins and the
+    // order records arrive in does not change the answer.
+    if (held === undefined || currencyOfEntry(row.entry) > currencyOfEntry(resolved[held]!.entry)) {
+      currentFor.set(row.chosen.id, index);
+    }
+  });
+
+  const items: EpPlanItem[] = resolved.map((row, index) => {
+    if (!row.chosen || row.outcome) {
+      return item(row.entry, row.outcome ?? "needsTriage", null, row.candidates, null, row.explanation);
+    }
+
+    const current = currentFor.get(row.chosen.id);
+    if (current !== index) {
+      // Superseded by another BambooHR record for the same certification. Note
+      // that this applies even when the current one turns out to have no file:
+      // uploading the older certificate would put a stale document on the
+      // profile as though it were the credential in force.
+      const winner = resolved[current!]!.entry;
+      return item(
+        row.entry,
+        "duplicateInPlan",
+        row.chosen,
+        row.candidates,
+        null,
+        `Superseded by "${winner.name}", completed ${winner.completed ?? "an unknown date"}.`,
       );
-      continue;
+    }
+
+    // "Already there" is a statement about the catalogue entry, so it is only
+    // meaningful once a template is settled.
+    const already = newestFor(input.existing, row.chosen.id);
+    if (already && !isRenewalOf(row.entry, already)) {
+      return item(
+        row.entry,
+        already.importedFrom ? "importedByTargetSolutions" : "alreadyInEp",
+        row.chosen,
+        row.candidates,
+        already,
+        already.importedFrom
+          ? `Already in EP, imported from ${already.importedFrom}. The General Order says not to re-upload these.`
+          : "Already on your EP profile.",
+      );
     }
 
     // EP requires a completion date, so there is nothing to submit without one
     // - and the date is not this tool's to invent for the system of record.
-    // Triage would be the wrong place for it: none of the three answers there
-    // (pick a template, request one, mark it out of scope) fixes a missing
-    // date. The record has to be corrected in BambooHR first.
-    if (!entry.completed) {
-      items.push(
-        item(
-          entry,
-          "noCompletionDate",
-          chosen,
-          candidates,
-          already,
-          "This record has no completion date, and Essential Personnel requires one. " +
-            "Add the date in BambooHR and run the export again.",
-        ),
+    // Triage would be the wrong home for it: none of its three answers fixes a
+    // missing date. The record has to be corrected in BambooHR first.
+    if (!row.entry.completed) {
+      return item(
+        row.entry,
+        "noCompletionDate",
+        row.chosen,
+        row.candidates,
+        already,
+        "This record has no completion date, and Essential Personnel requires one. " +
+          "Add the date in BambooHR and run the export again.",
       );
-      continue;
     }
 
-    if (!entry.file) {
+    if (!row.entry.file) {
       // The General Order permits a full official transcript here, and
       // explicitly refuses partial transcripts or single pages. That is an
       // errand for a person, not something to attempt.
-      items.push(
-        item(
-          entry,
-          "noFile",
-          chosen,
-          candidates,
-          null,
-          "No certificate file was found for this record. A full official transcript may be submitted instead - partial transcripts are not accepted.",
-        ),
-      );
-      continue;
-    }
-
-    const previous = queued.get(chosen.id);
-    if (previous !== undefined) {
-      // Two records for one certification. The later sitting is the one worth
-      // having in the system of record; the other is the same credential
-      // recorded twice in BambooHR, and uploading both would put two copies on
-      // the profile.
-      const earlier = items[previous]!;
-      const supersedes = (entry.completed ?? "") > (earlier.entry.completed ?? "");
-      const loser = supersedes ? earlier : null;
-      if (loser) {
-        items[previous] = {
-          ...earlier,
-          outcome: "duplicateInPlan",
-          explanation:
-            `Also recorded as "${entry.name}", completed ${entry.completed}, ` +
-            "which is the one being uploaded.",
-        };
-      } else {
-        items.push(
-          item(
-            entry,
-            "duplicateInPlan",
-            chosen,
-            candidates,
-            already,
-            `Already covered by "${earlier.entry.name}", completed ` +
-              `${earlier.entry.completed}, which is the one being uploaded.`,
-          ),
-        );
-        continue;
-      }
-    }
-
-    queued.set(chosen.id, items.length);
-    items.push(
-      item(
-        entry,
-        "ready",
-        chosen,
-        candidates,
+      return item(
+        row.entry,
+        "noFile",
+        row.chosen,
+        row.candidates,
         already,
-        already
-          ? `Renews the ${already.completed} record already in EP. ` +
-            reasonFor(chosen, candidates)
-          : reasonFor(chosen, candidates),
-      ),
+        "No certificate file was found for this record. A full official transcript may be " +
+          "submitted instead - partial transcripts are not accepted.",
+      );
+    }
+
+    return item(
+      row.entry,
+      "ready",
+      row.chosen,
+      row.candidates,
+      already,
+      already
+        ? `Renews the ${already.completed} record already in EP. ` +
+          reasonFor(row.chosen, row.candidates)
+        : reasonFor(row.chosen, row.candidates),
     );
-  }
+  });
 
   return { items, catalogueRequests };
 }
 
+function settled(
+  entry: ManifestEntry,
+  candidates: EpTemplateMatch[],
+  outcome: EpOutcome,
+  chosen: EpTemplate | null,
+  explanation: string,
+) {
+  return { entry, candidates, chosen, outcome, explanation };
+}
 
 /**
- * How current an EP row is, as one comparable value.
+ * How current a sitting of a certification is, as one comparable value.
+ *
+ * The single measure this file ranks everything by: Essential Personnel's own
+ * rows, BambooHR's records, and two BambooHR records competing with each
+ * other. Five review rounds found the same class of mistake in three separate
+ * comparisons - each locally reasonable, none agreeing with the others - which
+ * is what a rule implemented three times buys you.
  *
  * Completion date first, then expiry. Successive extensions of one licence all
- * carry the SAME completion date, so comparing that alone leaves every row
- * tied and keeps whichever EP happened to return first - which may be the one
- * that expired years ago. Both dates are fixed-width ISO days, so comparing
- * them joined compares them in order.
- */
-function currency(row: EpUserCertification): string {
-  return `${row.completed ?? ""}|${row.expires ?? ""}`;
-}
-
-/** The most current EP row for a template, if there is one. */
-function newestFor(
-  existing: readonly EpUserCertification[],
-  templateId: string,
-): EpUserCertification | null {
-  const rows = existing.filter((row) => row.templateId === templateId);
-  if (rows.length === 0) return null;
-  return rows.reduce((newest, row) => (currency(row) > currency(newest) ? row : newest));
-}
-
-/**
- * Is this record a later sitting of what EP already holds?
+ * carry the SAME completion date, so completion alone leaves them tied and
+ * keeps whichever happened to come first, possibly the one that expired years
+ * ago. Comparing the pair in that order also refuses the inverse: an older
+ * record that runs longer is not more current than a later sitting, because
+ * the completion dates decide before the expiries are ever reached.
  *
- * Certifications expire and are retaken. Treating every row with the same
- * template as "already there" leaves the system of record showing an expired
- * credential while the member holds a current one - precisely what the General
- * Order exists to prevent.
- *
- * Both dates must be known: with no evidence of a renewal, assuming one would
- * upload a second copy of something already present.
+ * Both are fixed-width ISO days, so the joined strings compare in date order.
  */
-function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boolean {
-  if (entry.completed && existing.completed && entry.completed > existing.completed) {
-    return true;
-  }
-
-  // Some credentials are renewed without the completion date moving: a licence
-  // keeps its original issue date and gains a later expiry. Comparing only
-  // completion dates called that a duplicate and left the expired copy standing
-  // in the system of record as the current one.
-  //
-  // A DERIVED expiry is not evidence of anything. Part 1 computes those from a
-  // renewal frequency, so treating one as proof of a renewal would upload a
-  // duplicate on the strength of this app's own arithmetic.
-  //
-  // The completion dates must not disagree in the other direction. A 2018
-  // credential expiring in 2027 is NOT a renewal of a 2020 recertification
-  // expiring in 2025: the EP row is the later sitting, and calling the older
-  // record a renewal would upload a stale certificate over a current one.
-  if (
-    !entry.expiresDerived &&
-    entry.expires &&
-    existing.expires &&
-    entry.expires > existing.expires &&
-    entry.completed &&
-    existing.completed &&
-    entry.completed >= existing.completed
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
 /**
  * Only a high-confidence match is proposed without being asked for, and only
  * when it is clearly ahead of the runner-up. Two catalogue entries scoring
@@ -536,6 +472,52 @@ function item(
   explanation: string,
 ): EpPlanItem {
   return { entry, outcome, template, candidates, existing, explanation };
+}
+
+function currencyOf(completed: string | null, expires: string | null): string {
+  return `${completed ?? ""}|${expires ?? ""}`;
+}
+
+function currency(row: EpUserCertification): string {
+  return currencyOf(row.completed, row.expires);
+}
+
+/**
+ * A derived expiry is Part 1's arithmetic, not a date an issuer stated, and it
+ * is left out of the comparison entirely. Counting it would let this app's own
+ * guess decide which of two real records is the current one.
+ */
+function currencyOfEntry(entry: ManifestEntry): string {
+  return currencyOf(entry.completed, entry.expiresDerived ? null : entry.expires);
+}
+
+/** The most current EP row for a template, if there is one. */
+function newestFor(
+  existing: readonly EpUserCertification[],
+  templateId: string,
+): EpUserCertification | null {
+  const rows = existing.filter((row) => row.templateId === templateId);
+  if (rows.length === 0) return null;
+  return rows.reduce((newest, row) => (currency(row) > currency(newest) ? row : newest));
+}
+
+/**
+ * Is this record a later sitting of what EP already holds?
+ *
+ * Certifications expire and are retaken. Treating every row with the same
+ * template as "already there" leaves the system of record showing an expired
+ * credential while the member holds a current one - precisely what the General
+ * Order exists to prevent.
+ *
+ * Both dates must be known: with no evidence of a renewal, assuming one would
+ * upload a second copy of something already present.
+ */
+function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boolean {
+  // Both completion dates must be known. Without them there is no evidence of
+  // a renewal, and inventing one uploads a second copy of something already
+  // present.
+  if (!entry.completed || !existing.completed) return false;
+  return currencyOfEntry(entry) > currency(existing);
 }
 
 /** What a single upload sends. Assembled here so the shape is testable. */

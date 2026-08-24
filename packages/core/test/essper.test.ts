@@ -598,3 +598,76 @@ describe("an older record that happens to run longer", () => {
     expect(plan.items[0]!.outcome).toBe("alreadyInEp");
   });
 });
+
+describe("choosing between two BambooHR records for one certification", () => {
+  /**
+   * Both findings from the tenth review round. They were separate symptoms of
+   * one cause: "which record is current" existed in three implementations
+   * that did not agree, and each was fixed in isolation. There is now one
+   * comparator, and these two cases fall out of it rather than being handled.
+   */
+  it("prefers the longer expiry when the completion dates tie", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15", expires: "2024-04-15" }),
+        entry({ key: "certifications:9", completed: "2018-04-15", expires: "2028-04-15" }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+  });
+
+  /**
+   * A newer sitting with no certificate still supersedes an older one that has
+   * a file. Uploading the older certificate would put a stale document on the
+   * profile as though it were the credential in force - the newer sitting
+   * needs a transcript, not the previous certificate.
+   */
+  it("lets a newer record with no file suppress an older one that has a file", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15" }),
+        entry({ key: "certifications:9", completed: "2024-06-01", file: null }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "noFile"]);
+  });
+
+  it("does not let a derived expiry decide which record wins", () => {
+    const plan = buildEpPlan({
+      entries: [
+        entry({ key: "training:1", completed: "2018-04-15", expires: "2024-04-15" }),
+        entry({
+          key: "certifications:9",
+          completed: "2018-04-15",
+          expires: "2030-01-01",
+          expiresDerived: true,
+        }),
+      ],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    // The derived date reaches further, and is this app's own arithmetic.
+    expect(plan.items.map((i) => i.outcome)).toEqual(["ready", "duplicateInPlan"]);
+  });
+
+  it("gives the same answer whichever order the records arrive in", () => {
+    const older = entry({ key: "training:1", completed: "2018-04-15" });
+    const newer = entry({ key: "certifications:9", completed: "2024-06-01" });
+    const forwards = buildEpPlan({
+      entries: [older, newer],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    const backwards = buildEpPlan({
+      entries: [newer, older],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(forwards.items.find((i) => i.outcome === "ready")!.entry.key).toBe("certifications:9");
+    expect(backwards.items.find((i) => i.outcome === "ready")!.entry.key).toBe("certifications:9");
+  });
+});
