@@ -93,7 +93,19 @@ export class EpClient {
   /** EP's certification catalogue: the fixed vocabulary a record must match. */
   async listTemplates(): Promise<EpTemplate[]> {
     const body = await this.getJson<{ templates?: unknown }>("/template/certification/all");
-    const rows = Array.isArray(body.templates) ? body.templates : [];
+    if (!Array.isArray(body.templates)) {
+      // An empty catalogue would send every record to triage with "nothing in
+      // EP resembles this", which is a confident answer to a question that was
+      // never actually asked.
+      throw new EpApiError({
+        status: 200,
+        path: "/template/certification/all",
+        message:
+          "Essential Personnel returned an unfamiliar answer when asked for its list of " +
+          "certifications.",
+      });
+    }
+    const rows = body.templates;
     return rows.flatMap((row) => {
       const record = asRecord(row);
       const id = stringOf(record?.["_id"]);
@@ -119,7 +131,25 @@ export class EpClient {
       `/user-certifications?userId=${encodeURIComponent(userId)}` +
       `&skip=0&limit=500&archived=false`;
     const body = await this.getJson<{ data?: unknown; total?: unknown }>(path);
-    const rows = Array.isArray(body.data) ? body.data : [];
+
+    // Every failure below is treated as an error rather than as an empty list,
+    // and the reason is the same in each case: this list is the ONLY evidence
+    // that a certification is already on the member's profile. An empty or
+    // half-read list does not read as "something went wrong" downstream - it
+    // reads as "the member holds nothing", and the tool then offers to upload
+    // their entire record a second time. Against an undocumented API expected
+    // to change, that has to fail closed.
+    if (!Array.isArray(body.data)) {
+      throw new EpApiError({
+        status: 200,
+        path,
+        message:
+          "Essential Personnel returned an unfamiliar answer when asked which " +
+          "certifications you already have. Refusing to continue, because carrying on " +
+          "would offer to upload records you already hold.",
+      });
+    }
+    const rows = body.data;
 
     const total = typeof body.total === "number" ? body.total : rows.length;
     if (rows.length < total) {
@@ -133,7 +163,20 @@ export class EpClient {
       });
     }
 
-    return rows.map((row) => toCertification(asRecord(row) ?? {}));
+    return rows.map((row) => {
+      const certification = toCertification(asRecord(row) ?? {});
+      if (!certification.templateId) {
+        throw new EpApiError({
+          status: 200,
+          path,
+          message:
+            "One of the certifications on your Essential Personnel profile does not name " +
+            "which certification it is. Refusing to continue, because it cannot be " +
+            "compared against your records and might be uploaded again.",
+        });
+      }
+      return certification;
+    });
   }
 
   /**

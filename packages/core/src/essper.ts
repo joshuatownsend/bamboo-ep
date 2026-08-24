@@ -78,6 +78,7 @@ export type EpOutcome =
   | "alreadyInEp"
   | "importedByTargetSolutions"
   | "needsTriage"
+  | "noCompletionDate"
   | "skipped"
   | "requested"
   | "noFile";
@@ -311,6 +312,26 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
       continue;
     }
 
+    // EP requires a completion date, so there is nothing to submit without one
+    // - and the date is not this tool's to invent for the system of record.
+    // Triage would be the wrong place for it: none of the three answers there
+    // (pick a template, request one, mark it out of scope) fixes a missing
+    // date. The record has to be corrected in BambooHR first.
+    if (!entry.completed) {
+      items.push(
+        item(
+          entry,
+          "noCompletionDate",
+          chosen,
+          candidates,
+          already,
+          "This record has no completion date, and Essential Personnel requires one. " +
+            "Add the date in BambooHR and run the export again.",
+        ),
+      );
+      continue;
+    }
+
     if (!entry.file) {
       // The General Order permits a full official transcript here, and
       // explicitly refuses partial transcripts or single pages. That is an
@@ -407,8 +428,11 @@ function item(
 /** What a single upload sends. Assembled here so the shape is testable. */
 export interface EpSubmission {
   templateId: string;
-  /** EP stores this as `year`, despite it being a full date. */
-  completed: string | null;
+  /**
+   * EP stores this as `year`, despite it being a full date, and requires it.
+   * Non-null by construction: a record without one never reaches "ready".
+   */
+  completed: string;
   expires: string | null;
   /** EP stores this as `school`. */
   institution: string | null;
@@ -417,7 +441,13 @@ export interface EpSubmission {
 }
 
 export function submissionFor(item: EpPlanItem): EpSubmission | null {
-  if (item.outcome !== "ready" || !item.template || !item.entry.file) return null;
+  // `completed` is checked again rather than assumed from the outcome: this
+  // function builds what is actually sent, and EP rejects a create with no
+  // date. A guard at the point of use costs nothing and does not depend on
+  // the planner and the submitter agreeing forever.
+  if (item.outcome !== "ready" || !item.template || !item.entry.file || !item.entry.completed) {
+    return null;
+  }
   return {
     templateId: item.template.id,
     completed: item.entry.completed,

@@ -202,3 +202,36 @@ describe("creating the record", () => {
     ).rejects.toThrow(/did not confirm/i);
   });
 });
+
+describe("failing closed on an answer we do not recognise", () => {
+  /**
+   * The list of existing certifications is the only evidence that something is
+   * already on the member's profile. An empty or half-read one does not read
+   * as "something went wrong" downstream - it reads as "the member holds
+   * nothing", and the tool then offers to upload their whole record again.
+   */
+  it("refuses a certification list that is not a list", async () => {
+    const { fetchImpl } = stub([{ body: JSON.stringify({ data: { nope: true }, total: 3 }) }]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /unfamiliar answer/i,
+    );
+  });
+
+  it("refuses a certification row that does not say which certification it is", async () => {
+    const { fetchImpl } = stub([
+      { body: JSON.stringify({ total: 1, data: [{ _id: "u1", year: "2020-01-01" }] }) },
+    ]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listCertifications("me")).rejects.toThrow(
+      /does not name which certification/i,
+    );
+  });
+
+  it("refuses a catalogue that is not a list", async () => {
+    // An empty catalogue would send every record to triage saying nothing in
+    // EP resembles it - a confident answer to a question never really asked.
+    const { fetchImpl } = stub([{ body: JSON.stringify({ templates: null }) }]);
+    await expect(new EpClient(fetchImpl, BASE, KEY).listTemplates()).rejects.toThrow(
+      /unfamiliar answer/i,
+    );
+  });
+});

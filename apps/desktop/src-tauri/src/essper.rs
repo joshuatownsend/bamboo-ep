@@ -151,8 +151,19 @@ fn tenant_url(tenant: &str, path: &str) -> Result<String, String> {
 pub async fn essper_open_login(app: tauri::AppHandle, tenant: String) -> Result<(), String> {
     let origin = tenant_origin(&tenant)?;
     if let Some(existing) = app.get_webview_window(LOGIN_WINDOW) {
-        let _ = existing.set_focus();
-        return Ok(());
+        // The window has a fixed label, so a second call finds whatever was
+        // opened first - which may be signed in to a DIFFERENT company if the
+        // member corrected the name. Focusing it would show them a working
+        // session while every request read cookies for the new host and failed
+        // to authenticate, with the window in front of them insisting they are
+        // already signed in.
+        if shows_origin(&existing, &origin) {
+            let _ = existing.set_focus();
+            return Ok(());
+        }
+        existing
+            .close()
+            .map_err(|e| format!("Could not close the previous Essential Personnel window: {e}"))?;
     }
 
     let url = Url::parse(&origin).map_err(|e| format!("Could not open {origin}: {e}"))?;
@@ -174,6 +185,21 @@ pub async fn essper_close_login(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Is this window showing the company we are about to use?
+///
+/// Compared by origin rather than by full URL: the member navigates around
+/// while signing in, and any page on the right host is the right window.
+fn shows_origin(window: &tauri::WebviewWindow, origin: &str) -> bool {
+    window
+        .url()
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?.to_ascii_lowercase();
+            Some(format!("{}://{}", url.scheme(), host) == origin)
+        })
+        .unwrap_or(false)
+}
+
 /// The member's session, taken from the login window.
 ///
 /// Returns an empty string when there is no window or no cookie yet, which is
@@ -183,6 +209,12 @@ fn session_cookies(app: &tauri::AppHandle, tenant: &str) -> Result<String, Strin
         return Ok(String::new());
     };
     let origin = tenant_origin(tenant)?;
+    // A window still showing another company has no session for this one.
+    // Reporting "not signed in" is the truthful answer and sends the member to
+    // sign in, which reopens the window at the right place.
+    if !shows_origin(&window, &origin) {
+        return Ok(String::new());
+    }
     let url = Url::parse(&origin).map_err(|e| format!("Could not read the session: {e}"))?;
 
     let cookies = window

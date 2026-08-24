@@ -404,3 +404,21 @@ describe("what a submission carries", () => {
     expect(submissionFor(plan.items[0]!)).toBeNull();
   });
 });
+
+describe("records Essential Personnel could not accept", () => {
+  /**
+   * EP requires a completion date. Marking such a record ready would present
+   * it as submit-ready right up to the moment the create was rejected - and
+   * the date is not this tool's to invent for the system of record.
+   */
+  it("does not offer a record with no completion date", () => {
+    const plan = buildEpPlan({
+      entries: [entry({ completed: null })],
+      templates: CATALOGUE,
+      existing: noExisting,
+    });
+    expect(plan.items[0]!.outcome).toBe("noCompletionDate");
+    expect(plan.items[0]!.explanation).toMatch(/add the date in bamboohr/i);
+    expect(submissionFor(plan.items[0]!)).toBeNull();
+  });
+});
