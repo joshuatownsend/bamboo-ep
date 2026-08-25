@@ -673,3 +673,59 @@ code {
 .ai-panel code {
   word-break: break-all;
 }
+
+/* --- Essential Personnel submission ------------------------------------- */
+
+.ep-section {
+  margin-top: 1.75rem;
+}
+
+.ep-section h3 {
+  margin-bottom: 0.25rem;
+}
+
+.ep-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ep-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line, #d8dee9);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+}
+
+.ep-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+/* The controls stay on one line and never squeeze the certification name,
+   which is the thing being decided about. */
+.ep-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ep-requests {
+  padding: 0.75rem;
+  border-radius: 6px;
+  background: var(--sunken, #f4f6f9);
+  white-space: pre-wrap;
+  user-select: all;
+}

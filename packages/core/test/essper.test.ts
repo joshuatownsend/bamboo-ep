@@ -195,7 +195,7 @@ describe("decisions the member has already made", () => {
       entries: [vrs],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "skip" } },
+      decisions: { "training:vrs": { handling: { kind: "skip" } } },
     });
     expect(plan.items[0]!.outcome).toBe("skipped");
     expect(plan.catalogueRequests).toEqual([]);
@@ -206,7 +206,7 @@ describe("decisions the member has already made", () => {
       entries: [entry({ key: "training:vrs", name: "Volunteer Recruit School" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "request" } },
+      decisions: { "training:vrs": { handling: { kind: "request" } } },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
   });
@@ -216,7 +216,7 @@ describe("decisions the member has already made", () => {
       entries: [entry({ name: "Something the matcher cannot place" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:1": { kind: "template", templateId: "t-forklift" } },
+      decisions: { "training:1": { handling: { kind: "template", templateId: "t-forklift" } } },
     });
     expect(plan.items[0]!.outcome).toBe("ready");
     expect(plan.items[0]!.template!.id).toBe("t-forklift");
@@ -230,7 +230,7 @@ describe("decisions the member has already made", () => {
       entries: [entry()],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:1": { kind: "template", templateId: "t-deleted" } },
+      decisions: { "training:1": { handling: { kind: "template", templateId: "t-deleted" } } },
     });
     expect(plan.items[0]!.outcome).toBe("needsTriage");
   });
@@ -314,7 +314,7 @@ describe("decisions keyed by a row's position", () => {
       entries: [entry({ key: "certifications:row-0" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:row-0": { kind: "skip" } },
+      decisions: { "certifications:row-0": { handling: { kind: "skip" } } },
     });
     expect(plan.items[0]!.outcome).not.toBe("skipped");
   });
@@ -324,7 +324,7 @@ describe("decisions keyed by a row's position", () => {
       entries: [entry({ key: "certifications:row-3", name: "Unplaceable name" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:row-3": { kind: "template", templateId: "t-forklift" } },
+      decisions: { "certifications:row-3": { handling: { kind: "template", templateId: "t-forklift" } } },
     });
     expect(plan.items[0]!.template).toBeNull();
   });
@@ -334,7 +334,7 @@ describe("decisions keyed by a row's position", () => {
       entries: [entry({ key: "certifications:8821" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:8821": { kind: "skip" } },
+      decisions: { "certifications:8821": { handling: { kind: "skip" } } },
     });
     expect(plan.items[0]!.outcome).toBe("skipped");
   });
@@ -346,7 +346,7 @@ describe("the catalogue request list", () => {
       entries: [entry({ key: "training:vrs", name: "[SWP] Volunteer Recruit School" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "request" } },
+      decisions: { "training:vrs": { handling: { kind: "request" } } },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
   });
@@ -360,8 +360,8 @@ describe("the catalogue request list", () => {
       templates: CATALOGUE,
       existing: noExisting,
       decisions: {
-        "training:a": { kind: "request" },
-        "training:b": { kind: "request" },
+        "training:a": { handling: { kind: "request" } },
+        "training:b": { handling: { kind: "request" } },
       },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);

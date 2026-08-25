@@ -34,6 +34,7 @@ import {
   saveSettings,
 } from "./platform";
 import type { Settings } from "./platform";
+import { EssperScreen } from "./screens/EssperScreen";
 import { SetupScreen } from "./screens/SetupScreen";
 import { ProbeScreen } from "./screens/ProbeScreen";
 import { ReviewScreen } from "./screens/ReviewScreen";
@@ -43,7 +44,7 @@ import "./App.css";
 
 const APP_VERSION = "0.1.0";
 
-type Step = "setup" | "probe" | "review" | "result";
+type Step = "setup" | "probe" | "review" | "result" | "essper";
 
 const STEP_LABELS: Array<{ step: Step; label: string }> = [
   { step: "setup", label: "Connect" },
@@ -547,8 +548,17 @@ export default function App() {
           <ResultScreen
             result={result}
             exportProblems={exportProblems}
+            onSendToEssper={() => setStep("essper")}
             outputDir={settings.outputDir}
             onRestart={restart}
+          />
+        )}
+
+        {step === "essper" && (
+          <EssperScreen
+            manifest={result?.manifest ?? null}
+            directory={settings.outputDir}
+            onBack={() => setStep("result")}
           />
         )}
       </section>

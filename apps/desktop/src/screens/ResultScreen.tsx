@@ -19,9 +19,17 @@ interface Props {
   exportProblems: readonly string[];
   outputDir: string | null;
   onRestart: () => void;
+  /** Straight on to the half of the job the General Order actually asks for. */
+  onSendToEssper: () => void;
 }
 
-export function ResultScreen({ result, exportProblems, outputDir, onRestart }: Props) {
+export function ResultScreen({
+  result,
+  exportProblems,
+  outputDir,
+  onRestart,
+  onSendToEssper,
+}: Props) {
   const { summary } = result.manifest;
   const hasFailures = result.failures.length > 0 || exportProblems.length > 0;
   const savedOrphanCount = result.manifest.orphanFiles.filter(
@@ -93,8 +101,16 @@ export function ResultScreen({ result, exportProblems, outputDir, onRestart }: P
         )}
 
         <div className="actions">
+          {/*
+            The primary action, because downloading the files is not what the
+            General Order asks for - getting them into Essential Personnel is.
+            Opening the folder is what someone does to check the work.
+          */}
+          <button type="button" className="primary" onClick={onSendToEssper}>
+            Send to Essential Personnel
+          </button>
           {outputDir && (
-            <button type="button" className="primary" onClick={() => void openPath(outputDir)}>
+            <button type="button" className="secondary" onClick={() => void openPath(outputDir)}>
               Open the folder
             </button>
           )}
