@@ -165,7 +165,33 @@ rather than attempt anything.
 - **Does the catalogue endpoint paginate?** `/api/certifications/settings` was fetched in
   one call, but the dropdown is virtualised and the full size is unknown.
 - **Institution Name** — what EP expects. BambooHR's instructor field is a person, which
-  may be wrong for a field labelled "institution."
+  is wrong for a field labelled "institution", so nothing is sent for it: the submission
+  leaves it empty rather than writing a name into the system of record while the question
+  is open. Candidates are the issuing body read off the certificate (the AI extraction
+  already has it), a constant naming the department, or asking the member.
+- **How the member settles a calculated expiry** — see below. The outcome exists; the way
+  they answer does not, and belongs with the screen that asks.
+
+## Expiry dates this app calculated
+
+Part 1 derives an expiry from a training type's renewal frequency when BambooHR states
+none. Neither way of submitting one is safe on its own:
+
+- Sending the date writes this app's arithmetic into the system of record as though an
+  issuer had stated it.
+- Sending nothing is **worse**: Essential Personnel reads a blank expiry as *never
+  expires*, so a renewable credential would be recorded as permanently valid.
+
+So those records are held at `expiryNotStated` and never submitted. The member settles
+them — it is their certification and, under the General Order, their responsibility — but
+the choice has to be made by a person rather than fallen into by a default.
+
+**The mechanism for them to answer is deliberately not built yet.** A first attempt added
+one before there was any screen to ask the question, and it needed decisions that only a
+real interface makes concrete: whether an answer given for a record BambooHR gave no id to
+may be remembered on a later run, and whether a member's "does not expire" should override
+a dated expiry Essential Personnel already holds. Both are worth getting right against
+something real rather than in the abstract.
 
 ## Part 3 — the folder no system knows about
 
