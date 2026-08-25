@@ -40,7 +40,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The label of the sign-in window. Fixed, so a second attempt reuses the
 /// window the member already has open rather than stacking another on top.
-const LOGIN_WINDOW: &str = "essper-login";
+pub const LOGIN_WINDOW: &str = "essper-login";
 
 /// Certificates are small; this is a guard against a runaway response, not a
 /// meaningful limit. Essential Personnel's own form accepts up to 100 MB.
@@ -161,6 +161,11 @@ pub async fn essper_open_login(app: tauri::AppHandle, tenant: String) -> Result<
         // to authenticate, with the window in front of them insisting they are
         // already signed in.
         if shows_origin(&existing, &origin) {
+            // It may be hidden rather than merely behind: once the record has
+            // been read the window is put out of sight, not closed. Focusing a
+            // hidden window does nothing visible, which would look like the
+            // Sign in button being dead.
+            let _ = existing.show();
             let _ = existing.set_focus();
             return Ok(());
         }
@@ -178,13 +183,39 @@ pub async fn essper_open_login(app: tauri::AppHandle, tenant: String) -> Result<
     Ok(())
 }
 
+/// Put the sign-in window out of sight, keeping the session alive.
+///
+/// **This window IS the session.** `session_cookies` reads the member's cookies
+/// out of it, so closing it signs them out as far as this app is concerned -
+/// and closing it after reading their record, which is what an earlier version
+/// did, meant every upload afterwards failed with "not signed in" while the app
+/// went on displaying their name. Hiding keeps the webview and its cookie store
+/// alive while getting the window out of the way, which was the only thing
+/// closing it was ever for.
 #[tauri::command]
-pub async fn essper_close_login(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn essper_hide_login(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
         window
-            .close()
-            .map_err(|e| format!("Could not close the Essential Personnel window: {e}"))?;
+            .hide()
+            .map_err(|e| format!("Could not hide the Essential Personnel window: {e}"))?;
     }
+    Ok(())
+}
+
+/// Close it for real, ending the borrowed session.
+///
+/// For when the member is done with Essential Personnel: leaving the screen, or
+/// quitting. A hidden window is still a window, so without this the app would
+/// keep running invisibly after its last visible window was closed.
+pub fn close_login_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
+pub async fn essper_close_login(app: tauri::AppHandle) -> Result<(), String> {
+    close_login_window(&app);
     Ok(())
 }
 

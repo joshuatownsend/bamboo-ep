@@ -52,6 +52,17 @@ export function openEssperLogin(tenant: string): Promise<void> {
   return invoke("essper_open_login", { tenant });
 }
 
+/**
+ * Get the sign-in window out of the way WITHOUT ending the session.
+ *
+ * Rust reads the member's cookies out of that window, so it has to outlive
+ * every request the screen makes - see `essper_hide_login`.
+ */
+export function hideEssperLogin(): Promise<void> {
+  return invoke("essper_hide_login");
+}
+
+/** Done with Essential Personnel: end the borrowed session. */
 export function closeEssperLogin(): Promise<void> {
   return invoke("essper_close_login");
 }

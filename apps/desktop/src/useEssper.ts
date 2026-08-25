@@ -11,6 +11,7 @@ import {
 import {
   clientFor,
   closeEssperLogin,
+  hideEssperLogin,
   openEssperLogin,
   signedInMember,
   submitCertification,
@@ -109,10 +110,12 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
       ]);
       setTemplates(catalogue);
       setExisting(held);
-      // The sign-in window has done its job. Left open it is a second copy of
-      // the member's record sitting behind the app, easy to mistake for the
-      // thing they are working in.
-      await closeEssperLogin().catch(() => undefined);
+      // Out of sight, but NOT closed. Left visible it is a second copy of the
+      // member's record sitting behind the app, easy to mistake for the thing
+      // they are working in - but that window holds the session cookies every
+      // later request depends on, so closing it here signed them out just
+      // before the uploads that needed them.
+      await hideEssperLogin().catch(() => undefined);
     } catch (e) {
       setError(messageOf(e));
     } finally {
@@ -204,6 +207,19 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
     setBusy(false);
   }, [directory, load, member, plan, tenant, uploads]);
 
+  /**
+   * Leave Essential Personnel: close the window, and with it the session.
+   *
+   * The counterpart to hiding. Once the member is off this screen there is
+   * nothing left that needs their session, and a hidden window they cannot see
+   * is not something to leave holding one.
+   */
+  const signOut = useCallback(async () => {
+    stopPolling();
+    await closeEssperLogin().catch(() => undefined);
+    setMember(null);
+  }, [stopPolling]);
+
   return {
     tenant,
     member,
@@ -219,6 +235,7 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
     decideMany,
     forget,
     submitAll,
+    signOut,
     stopPolling,
   };
 }

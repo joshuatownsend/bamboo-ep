@@ -216,7 +216,10 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
             )}
 
             <div className="actions">
-              <button onClick={onBack} disabled={ep.busy}>
+              <button
+                onClick={() => void ep.signOut().finally(onBack)}
+                disabled={ep.busy}
+              >
                 Back
               </button>
               <button

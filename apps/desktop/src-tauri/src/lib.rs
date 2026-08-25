@@ -18,6 +18,7 @@ mod ai;
 mod essper;
 
 use keyring::Entry;
+use tauri::Manager;
 
 /// One credential per BambooHR company, so a user with access to more than one
 /// subdomain does not have them overwrite each other. AI provider keys share
@@ -288,11 +289,23 @@ pub fn run() {
             ai::delete_ai_key,
             ai::ai_extract,
             essper::essper_open_login,
+            essper::essper_hide_login,
             essper::essper_close_login,
             essper::essper_session,
             essper::essper_request,
             essper::essper_upload_file
         ])
+        // The sign-in window is hidden rather than closed, because it holds the
+        // session. A hidden window still counts as a window, so closing the
+        // last visible one would otherwise leave the app running with nothing
+        // on screen and no way back to it.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                && window.label() != essper::LOGIN_WINDOW
+            {
+                essper::close_login_window(window.app_handle());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
