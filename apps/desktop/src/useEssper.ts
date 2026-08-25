@@ -128,6 +128,31 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
     [manifest, templates, existing, decisions],
   );
 
+  /**
+   * Answer a whole bucket at once.
+   *
+   * Most of what lands in triage is training the member's own department runs
+   * and the county does not track - for a real record that was 144 of 166.
+   * Asking someone to click that 144 times is asking them to stop reading
+   * after the first twenty, which is worse than a bulk action they can undo:
+   * nothing is uploaded either way, and every row keeps its own Undo.
+   */
+  const decideMany = useCallback((keys: readonly string[], decision: EpDecisions[string]) => {
+    setDecisions((current) => {
+      const next = { ...current };
+      for (const key of keys) next[key] = decision;
+      return next;
+    });
+  }, []);
+
+  const forget = useCallback((keys: readonly string[]) => {
+    setDecisions((current) => {
+      const next = { ...current };
+      for (const key of keys) delete next[key];
+      return next;
+    });
+  }, []);
+
   const decide = useCallback((key: string, decision: EpDecisions[string] | null) => {
     setDecisions((current) => {
       const next = { ...current };
@@ -191,6 +216,8 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
     signIn,
     load,
     decide,
+    decideMany,
+    forget,
     submitAll,
     stopPolling,
   };

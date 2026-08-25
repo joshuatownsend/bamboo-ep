@@ -18,6 +18,9 @@ interface Props {
   onBack: () => void;
 }
 
+/** One list of every certification, shared by every row that needs one. */
+const CATALOGUE_LIST_ID = "ep-catalogue";
+
 /** The order the buckets are worth reading in. */
 const SECTIONS: Array<{ outcome: EpOutcome; title: string; blurb: string }> = [
   {
@@ -150,6 +153,37 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                     {section.title} ({items.length})
                   </h3>
                   <p className="muted">{section.blurb}</p>
+
+                  {section.outcome === "needsTriage" && (
+                    <p>
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          ep.decideMany(
+                            items.map((i) => i.entry.key),
+                            { handling: { kind: "skip" } },
+                          )
+                        }
+                      >
+                        Mark all {items.length} as not tracked by LC-CFRS
+                      </button>{" "}
+                      <span className="muted">
+                        Then pick out the few that should be requested. Nothing is sent
+                        either way, and each one can be undone.
+                      </span>
+                    </p>
+                  )}
+
+                  {section.outcome === "skipped" && (
+                    <p>
+                      <button
+                        className="link-button"
+                        onClick={() => ep.forget(items.map((i) => i.entry.key))}
+                      >
+                        Put all {items.length} back
+                      </button>
+                    </p>
+                  )}
                   <ul className="ep-list">
                     {items.map((item) => (
                       <Row
@@ -164,6 +198,12 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                 </section>
               );
             })}
+
+            <datalist id={CATALOGUE_LIST_ID}>
+              {ep.templates.map((t) => (
+                <option key={t.id} value={t.name} />
+              ))}
+            </datalist>
 
             {ep.plan.catalogueRequests.length > 0 && (
               <section className="ep-section">
@@ -248,30 +288,40 @@ function Row({
 
       {item.outcome === "needsTriage" && (
         <div className="ep-row-actions">
-          <select
-            defaultValue=""
-            onChange={(e) =>
-              e.target.value === ""
-                ? onDecide(key, null)
-                : onDecide(key, { handling: { kind: "template", templateId: e.target.value } })
-            }
-          >
-            <option value="">Pick a certification…</option>
-            {item.candidates.map((c) => (
-              <option key={c.template.id} value={c.template.id}>
-                {c.template.name} ({Math.round(c.score * 100)}%)
-              </option>
-            ))}
-            <optgroup label="Everything else">
-              {templates
-                .filter((t) => !item.candidates.some((c) => c.template.id === t.id))
-                .map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-            </optgroup>
-          </select>
+          {item.candidates.length > 0 && (
+            <select
+              defaultValue=""
+              onChange={(e) =>
+                e.target.value === ""
+                  ? onDecide(key, null)
+                  : onDecide(key, { handling: { kind: "template", templateId: e.target.value } })
+              }
+            >
+              <option value="">Closest matches…</option>
+              {item.candidates.map((c) => (
+                <option key={c.template.id} value={c.template.id}>
+                  {c.template.name} ({Math.round(c.score * 100)}%)
+                </option>
+              ))}
+            </select>
+          )}
+          {/*
+            A typed search against one shared <datalist>, rather than 401
+            options repeated in every row. With 144 records needing a decision
+            that was over fifty thousand option elements, which is why the
+            screen crawled - and typing beats scrolling a list that long
+            regardless.
+          */}
+          <input
+            list={CATALOGUE_LIST_ID}
+            placeholder="or search all 401…"
+            onChange={(e) => {
+              const match = templates.find((t) => t.name === e.target.value);
+              if (match) {
+                onDecide(key, { handling: { kind: "template", templateId: match.id } });
+              }
+            }}
+          />
           <button onClick={() => onDecide(key, { handling: { kind: "request" } })}>
             Ask for it to be added
           </button>

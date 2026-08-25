@@ -698,34 +698,51 @@ code {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  /* Wraps rather than pushing the actions off the side of the window. The
+     first version overflowed horizontally, which squeezed the certification
+     name into one word per line - the one thing on the row that has to stay
+     readable. */
+  flex-wrap: wrap;
   padding: 0.65rem 0.8rem;
-  border: 1px solid var(--line, #d8dee9);
-  border-radius: 6px;
-  background: var(--panel, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .ep-row-main {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  /* Without this a flex child refuses to shrink below its content, which is
+     what let the row overflow in the first place. */
   min-width: 0;
+  flex: 1 1 22rem;
 }
 
-/* The controls stay on one line and never squeeze the certification name,
-   which is the thing being decided about. */
+.ep-row-main .muted {
+  overflow-wrap: anywhere;
+}
+
 .ep-row-actions {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
+.ep-row-actions select,
+.ep-row-actions input {
+  max-width: 16rem;
+}
+
 .ep-requests {
   padding: 0.75rem;
-  border-radius: 6px;
-  background: var(--sunken, #f4f6f9);
+  border-radius: var(--radius);
+  background: var(--neutral-bg);
+  color: var(--text);
   white-space: pre-wrap;
+  overflow-x: auto;
   user-select: all;
 }
