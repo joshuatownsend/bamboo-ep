@@ -13,7 +13,6 @@
  */
 
 import type { ManifestEntry } from "./manifest.js";
-import { isStableKey } from "./items.js";
 import { tokenOverlap, tokenize, compareNumbers } from "./matching.js";
 
 /** One entry in EP's certification catalogue, from `/template/certification/all`. */
@@ -63,14 +62,92 @@ export interface EpTemplateMatch {
 
 /**
  * What the member decided about a record whose fate the matcher could not
- * settle on its own. Remembered between runs.
+ * settle on its own. Held for one run only - see `EpDecisions`.
+ *
+ * The two fields are answers to two independent questions, and a record can
+ * need both, so a caller updating one must preserve the other.
  */
-export type EpDecision =
-  | { kind: "template"; templateId: string }
-  | { kind: "skip"; note?: string }
-  | { kind: "request" };
+export interface EpDecision {
+  /**
+   * What to do with the record. Absent means the member has not said.
+   *
+   * Separate from `expiry` because a record can need both: a certification the
+   * matcher could not place, whose expiry was also calculated, needs a
+   * template AND an expiry. Sharing one slot meant answering the second
+   * question erased the answer to the first.
+   */
+  handling?:
+    | { kind: "template"; templateId: string }
+    | { kind: "skip"; note?: string }
+    | { kind: "request" };
 
-/** Keyed by `ManifestEntry.key`. */
+  /**
+   * The expiry to submit for a record whose expiry Part 1 calculated rather
+   * than read. `expires: null` means the member is asserting the certification
+   * does not expire, which is what Essential Personnel stores a blank as.
+   */
+  expiry?: { expires: string | null };
+}
+
+/**
+ * A change to ONE of the two answers a record can carry.
+ *
+ * `null` for a field clears just that field; an absent field is left alone.
+ * The distinction matters: "the member took back their template choice" and
+ * "this update is not about the template" are different instructions.
+ */
+export interface EpDecisionPatch {
+  handling?: EpDecision["handling"] | null;
+  expiry?: EpDecision["expiry"] | null;
+}
+
+/**
+ * Apply one patch to a record's answer, returning what to store - or `null`
+ * when nothing is left to remember.
+ *
+ * Lives here rather than in the screen because it is what keeps `EpDecision`'s
+ * two fields independent, which is the whole reason they are two fields. The
+ * screen used to replace the object wholesale, so answering the second
+ * question erased the first: a record needing both a template and an expiry
+ * bounced between the two buckets forever and could never be made ready.
+ */
+export function applyDecisionPatch(
+  existing: EpDecision | undefined,
+  patch: EpDecisionPatch,
+): EpDecision | null {
+  const merged: EpDecision = { ...existing };
+
+  // Only `null` clears. `undefined` means "this update is not about that
+  // field" - the same as leaving it out - because an optional field is
+  // routinely undefined by accident, and reading that as "erase the member's
+  // answer" makes a typo destructive.
+  if (patch.handling !== undefined) {
+    if (patch.handling === null) delete merged.handling;
+    else merged.handling = patch.handling;
+  }
+  if (patch.expiry !== undefined) {
+    // `{ expires: null }` is the member asserting the certification does not
+    // expire. That is an answer, not the absence of one, and must not be
+    // mistaken for a clear - which is why only `null` itself clears.
+    if (patch.expiry === null) delete merged.expiry;
+    else merged.expiry = patch.expiry;
+  }
+
+  // An empty decision and no decision mean the same thing; keeping one would
+  // make "has the member answered?" two questions instead of one.
+  return merged.handling || merged.expiry ? merged : null;
+}
+
+/**
+ * Keyed by `ManifestEntry.key`, and held for one run only.
+ *
+ * Nothing here is written to disk, which settles a question review raised
+ * twice: an answer given about a record BambooHR gave no id to is keyed by
+ * that record's POSITION in the response, and would name a different
+ * certification on the next run. Since the member answers while looking at the
+ * list and submits once, there is nothing to gain by remembering. If that ever
+ * changes, only keys passing `isStableKey` may be saved.
+ */
 export type EpDecisions = Readonly<Record<string, EpDecision>>;
 
 export type EpOutcome =
@@ -94,6 +171,13 @@ export interface EpPlanItem {
   candidates: EpTemplateMatch[];
   /** Set when the record is already present, so the UI can say which row. */
   existing: EpUserCertification | null;
+  /**
+   * The expiry the member settled, for a record whose expiry was calculated.
+   *
+   * Carried here rather than passed to `submissionFor` separately, so the
+   * value that was checked is the value that gets sent.
+   */
+  expiry: { expires: string | null } | null;
   /** Why this landed where it did, in words a member can act on. */
   explanation: string;
 }
@@ -277,14 +361,30 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // credential the member never skipped, or file one under the template that
     // previously occupied the slot. Part 1 learned this the hard way; the rule
     // is shared rather than restated.
-    const decision = isStableKey(entry.key) ? decisions[entry.key] : undefined;
+    // Every decision is honoured, positional keys included.
+    //
+    // `isStableKey` guards REMEMBERING an answer across runs: a key like
+    // `certifications:row-3` names whatever drifted into that slot, so a saved
+    // answer could silently skip a credential the member never skipped. That
+    // hazard is entirely cross-run. These decisions are held in memory for one
+    // run, made against the very manifest this plan is built from, and the
+    // screen holding them unmounts when the member leaves - so within one plan
+    // build `row-3` names exactly one entry. Applying the guard here instead
+    // meant a member could pick a template, request a category or skip a row
+    // without an id, and watch nothing happen.
+    //
+    // The rule still stands at the boundary it was written for: see
+    // `EpDecisions`. Nothing may be written to disk unless its key passes
+    // `isStableKey`.
+    const decision = decisions[entry.key];
+    const handling = decision?.handling;
     const candidates = rankTemplates(entry.name, input.templates);
 
-    if (decision?.kind === "skip") {
+    if (handling?.kind === "skip") {
       return settled(entry, candidates, "skipped", null, "You marked this as not tracked by LC-CFRS.");
     }
 
-    if (decision?.kind === "request") {
+    if (handling?.kind === "request") {
       // Without the tag: this list becomes an email to the training captain
       // naming certifications to add, and "[TS] " is BambooHR's own bookkeeping
       // - meaningless to the reader, and enough to make one certification look
@@ -295,8 +395,8 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     }
 
     const chosen =
-      decision?.kind === "template"
-        ? (byTemplateId.get(decision.templateId) ?? null)
+      handling?.kind === "template"
+        ? (byTemplateId.get(handling.templateId) ?? null)
         : bestAutomatic(candidates);
 
     if (!chosen) {
@@ -358,7 +458,34 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // "Already there" is a statement about the catalogue entry, so it is only
     // meaningful once a template is settled.
     const already = newestFor(input.existing, row.chosen.id);
-    if (already && !isRenewalOf(row.entry, already)) {
+    const settledExpiry = decisions[row.entry.key]?.expiry ?? null;
+
+    // An unconfirmed calculated expiry can leave "already held" undecidable.
+    //
+    // `sittingOfEntry` discards a derived expiry - rightly, since this app's
+    // arithmetic is not evidence - so a record whose calculated expiry runs
+    // past EP's ranked as no newer and was reported as already on the profile.
+    // Only `expiryNotStated` rows offer the confirm buttons, so the member
+    // could never supply the date that would have made it a renewal: the
+    // outcome foreclosed the question whose answer decides the outcome.
+    //
+    // So the already-held verdict is withheld while confirming could overturn
+    // it, and the record carries on to the expiry question below. Below, not
+    // here, because a record with no file or no completion date cannot be
+    // submitted whatever its expiry - asking first would be noise in place of
+    // the answer the member can actually act on.
+    //
+    // Judged at its best case: if EP's row covers this sitting even taking
+    // BambooHR's calculated date at face value, nothing is in question, and a
+    // member re-running after an upload is not interrogated about a record
+    // already safely filed.
+    const confirmingCouldOverturnIt =
+      row.entry.expiresDerived &&
+      row.entry.expires !== null &&
+      settledExpiry === null &&
+      (!already || isRenewalOf(row.entry, already, { expires: row.entry.expires }));
+
+    if (already && !confirmingCouldOverturnIt && !isRenewalOf(row.entry, already, settledExpiry)) {
       return item(
         row.entry,
         already.importedFrom ? "importedByTargetSolutions" : "alreadyInEp",
@@ -368,6 +495,12 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
         already.importedFrom
           ? `Already in EP, imported from ${already.importedFrom}. The General Order says not to re-upload these.`
           : "Already on your EP profile.",
+        // The member's expiry answer travels with the row even though this
+        // outcome does not submit anything. Answering "does not expire" is
+        // what lands a record here, and the screen renders its Change control
+        // from `item.expiry` - so dropping it here left the answer stored,
+        // unshown, and impossible to take back.
+        settledExpiry,
       );
     }
 
@@ -415,7 +548,9 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // them to answer belongs with the review screen that will ask the
     // question - designing it here, with nothing to design it against, is
     // what this outcome deliberately defers.
-    if (row.entry.expiresDerived && row.entry.expires) {
+    // Reached either because EP holds nothing for this certification, or
+    // because the already-held verdict above was withheld pending this answer.
+    if (row.entry.expiresDerived && row.entry.expires && !settledExpiry) {
       return item(
         row.entry,
         "expiryNotStated",
@@ -438,6 +573,7 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
         ? `Renews the ${already.completed} record already in EP. ` +
           reasonFor(row.chosen, row.candidates)
         : reasonFor(row.chosen, row.candidates),
+      settledExpiry,
     );
   });
 
@@ -479,8 +615,9 @@ function item(
   candidates: EpTemplateMatch[],
   existing: EpUserCertification | null,
   explanation: string,
+  expiry: { expires: string | null } | null = null,
 ): EpPlanItem {
-  return { entry, outcome, template, candidates, existing, explanation };
+  return { entry, outcome, template, candidates, existing, explanation, expiry };
 }
 
 /**
@@ -583,12 +720,28 @@ function newestFor(
  * Both dates must be known: with no evidence of a renewal, assuming one would
  * upload a second copy of something already present.
  */
-function isRenewalOf(entry: ManifestEntry, existing: EpUserCertification): boolean {
+function isRenewalOf(
+  entry: ManifestEntry,
+  existing: EpUserCertification,
+  /**
+   * A confirmed expiry stops being a calculation and becomes the member's
+   * word, so it counts here. Without it, confirming a later expiry changed
+   * nothing: the record was still reported as already held.
+   */
+  settled: { expires: string | null } | null = null,
+): boolean {
   // Both completion dates must be known. Without them there is no evidence of
   // a renewal, and inventing one uploads a second copy of something already
   // present.
   if (!entry.completed || !existing.completed) return false;
-  return compareSittings(sittingOfEntry(entry), sittingOf(existing)) > 0;
+  // A confirmed "does not expire" is left as unknown rather than read as the
+  // furthest-off date. It may well be the more current answer, but uploading
+  // over something EP already holds on the strength of an ABSENCE is the wrong
+  // way round; the completion-date comparison still catches a real renewal.
+  const sitting = settled
+    ? { completed: entry.completed, expires: settled.expires }
+    : sittingOfEntry(entry);
+  return compareSittings(sitting, sittingOf(existing)) > 0;
 }
 
 /** What a single upload sends. Assembled here so the shape is testable. */
@@ -617,13 +770,13 @@ export function submissionFor(item: EpPlanItem): EpSubmission | null {
   // Checked here as well as in the planner, because this function decides what
   // is actually sent and "never expires" is not a value to arrive at by
   // omission.
-  if (item.entry.expiresDerived && item.entry.expires) return null;
+  if (item.entry.expiresDerived && item.entry.expires && !item.expiry) return null;
   return {
     templateId: item.template.id,
     completed: item.entry.completed,
-    // Non-null by construction for a derived expiry: those records are held
-    // at "expiryNotStated" and never reach here.
-    expires: item.entry.expires,
+    // A calculated expiry only reaches here once the member has settled it, so
+    // the date is either theirs or BambooHR's own.
+    expires: item.entry.expiresDerived ? (item.expiry?.expires ?? null) : item.entry.expires,
     // Deliberately not `entry.instructor`. Essential Personnel labels this
     // field "Institution Name", and BambooHR's instructor is a person - "Jane
     // Smith" is not the body that issued a certification. What belongs here is

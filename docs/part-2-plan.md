@@ -186,12 +186,20 @@ So those records are held at `expiryNotStated` and never submitted. The member s
 them — it is their certification and, under the General Order, their responsibility — but
 the choice has to be made by a person rather than fallen into by a default.
 
-**The mechanism for them to answer is deliberately not built yet.** A first attempt added
-one before there was any screen to ask the question, and it needed decisions that only a
-real interface makes concrete: whether an answer given for a record BambooHR gave no id to
-may be remembered on a later run, and whether a member's "does not expire" should override
-a dated expiry Essential Personnel already holds. Both are worth getting right against
-something real rather than in the abstract.
+The review screen asks it with two buttons - the calculated date, or "does not expire" -
+and both open questions are now answered against a real interface:
+
+- **Remembered between runs?** No. Nothing the member decides on this screen is written to
+  disk. That makes the positional-key hazard moot: an answer about a record BambooHR gave
+  no id to would be keyed by its position and name a different certification next time, and
+  since the member answers while looking at the list and submits once, there is nothing to
+  gain by saving it. If re-answering ever proves worth avoiding, only keys passing
+  `isStableKey` may be saved.
+- **Does "does not expire" override a dated expiry EP already holds?** No. It counts as the
+  member's word for what is submitted, but for deciding whether a record supersedes one EP
+  already has, an absence is not treated as the furthest-off date. Uploading over an
+  existing record on the strength of a blank is the wrong way round; a real renewal is
+  still caught by the completion date.
 
 ## Part 3 — the folder no system knows about
 

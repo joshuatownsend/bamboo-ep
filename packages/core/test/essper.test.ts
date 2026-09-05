@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyDecisionPatch,
   buildEpPlan,
   rankTemplates,
   scoreTemplate,
@@ -195,7 +196,7 @@ describe("decisions the member has already made", () => {
       entries: [vrs],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "skip" } },
+      decisions: { "training:vrs": { handling: { kind: "skip" } } },
     });
     expect(plan.items[0]!.outcome).toBe("skipped");
     expect(plan.catalogueRequests).toEqual([]);
@@ -206,7 +207,7 @@ describe("decisions the member has already made", () => {
       entries: [entry({ key: "training:vrs", name: "Volunteer Recruit School" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "request" } },
+      decisions: { "training:vrs": { handling: { kind: "request" } } },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
   });
@@ -216,7 +217,7 @@ describe("decisions the member has already made", () => {
       entries: [entry({ name: "Something the matcher cannot place" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:1": { kind: "template", templateId: "t-forklift" } },
+      decisions: { "training:1": { handling: { kind: "template", templateId: "t-forklift" } } },
     });
     expect(plan.items[0]!.outcome).toBe("ready");
     expect(plan.items[0]!.template!.id).toBe("t-forklift");
@@ -230,7 +231,7 @@ describe("decisions the member has already made", () => {
       entries: [entry()],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:1": { kind: "template", templateId: "t-deleted" } },
+      decisions: { "training:1": { handling: { kind: "template", templateId: "t-deleted" } } },
     });
     expect(plan.items[0]!.outcome).toBe("needsTriage");
   });
@@ -305,28 +306,46 @@ describe("renewals are not duplicates", () => {
 describe("decisions keyed by a row's position", () => {
   /**
    * A certifications row with no id is keyed by where it sat in BambooHR's
-   * response. Reorder the rows and the same key names a different
-   * certification - so a remembered "skip" could silently drop a credential
-   * the member never skipped. Part 1 has the same guard.
+   * response, so the same key names a different certification if the rows are
+   * reordered. That makes such a key unsafe to REMEMBER - and these decisions
+   * are not remembered. They are held in memory, answered against the list in
+   * front of the member, and discarded when the screen closes.
+   *
+   * These two cases previously asserted the opposite. Applying the cross-run
+   * guard to an in-memory answer meant a member could skip a row without a
+   * BambooHR id and watch nothing happen.
    */
-  it("ignores a remembered skip on a positional key", () => {
+  it("honours a skip on a positional key", () => {
     const plan = buildEpPlan({
       entries: [entry({ key: "certifications:row-0" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:row-0": { kind: "skip" } },
+      decisions: { "certifications:row-0": { handling: { kind: "skip" } } },
     });
-    expect(plan.items[0]!.outcome).not.toBe("skipped");
+    expect(plan.items[0]!.outcome).toBe("skipped");
   });
 
-  it("ignores a remembered template on a positional key", () => {
+  it("honours a template chosen for a positional key", () => {
     const plan = buildEpPlan({
       entries: [entry({ key: "certifications:row-3", name: "Unplaceable name" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:row-3": { kind: "template", templateId: "t-forklift" } },
+      decisions: { "certifications:row-3": { handling: { kind: "template", templateId: "t-forklift" } } },
     });
-    expect(plan.items[0]!.template).toBeNull();
+    expect(plan.items[0]!.template?.id).toBe("t-forklift");
+  });
+
+  it("honours a request on the training spelling of a positional key", () => {
+    // `training:record-N` is the other positional form, and the one a previous
+    // round found missing from the stability check entirely.
+    const plan = buildEpPlan({
+      entries: [entry({ key: "training:record-2", name: "Volunteer Recruit School" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:record-2": { handling: { kind: "request" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("requested");
+    expect(plan.catalogueRequests).toContain("Volunteer Recruit School");
   });
 
   it("still honours a decision on a real certifications id", () => {
@@ -334,7 +353,7 @@ describe("decisions keyed by a row's position", () => {
       entries: [entry({ key: "certifications:8821" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "certifications:8821": { kind: "skip" } },
+      decisions: { "certifications:8821": { handling: { kind: "skip" } } },
     });
     expect(plan.items[0]!.outcome).toBe("skipped");
   });
@@ -346,7 +365,7 @@ describe("the catalogue request list", () => {
       entries: [entry({ key: "training:vrs", name: "[SWP] Volunteer Recruit School" })],
       templates: CATALOGUE,
       existing: noExisting,
-      decisions: { "training:vrs": { kind: "request" } },
+      decisions: { "training:vrs": { handling: { kind: "request" } } },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
   });
@@ -360,8 +379,8 @@ describe("the catalogue request list", () => {
       templates: CATALOGUE,
       existing: noExisting,
       decisions: {
-        "training:a": { kind: "request" },
-        "training:b": { kind: "request" },
+        "training:a": { handling: { kind: "request" } },
+        "training:b": { handling: { kind: "request" } },
       },
     });
     expect(plan.catalogueRequests).toEqual(["Volunteer Recruit School"]);
@@ -543,10 +562,55 @@ describe("renewals that only move the expiry", () => {
    * BambooHR states none. Treating that as proof of a renewal would upload a
    * duplicate on the strength of this app's own arithmetic.
    */
-  it("does not treat a derived expiry as evidence of a renewal", () => {
+  it("asks about a derived expiry rather than deciding the record is already held", () => {
+    // This asserted `alreadyInEp` until review pointed out what that forecloses:
+    // a derived expiry is not evidence, so the record ranks as no newer - but
+    // only `expiryNotStated` rows offer the confirm buttons, so the member
+    // could never supply the date that would settle it. The verdict is withheld
+    // and the question asked instead.
+    const derived = entry({
+      completed: "2018-04-15",
+      expires: "2027-04-15",
+      expiresDerived: true,
+    });
+    const plan = buildEpPlan({
+      entries: [derived],
+      templates: CATALOGUE,
+      existing: [held()],
+    });
+    expect(plan.items[0]!.outcome).toBe("expiryNotStated");
+
+    // Confirming the later date makes it a renewal...
+    expect(
+      buildEpPlan({
+        entries: [derived],
+        templates: CATALOGUE,
+        existing: [held()],
+        decisions: { "training:1": { expiry: { expires: "2027-04-15" } } },
+      }).items[0]!.outcome,
+    ).toBe("ready");
+
+    // ...and saying it does not expire leaves EP's dated row standing, since
+    // an absence is not grounds to upload over the system of record.
+    const declined = buildEpPlan({
+      entries: [derived],
+      templates: CATALOGUE,
+      existing: [held()],
+      decisions: { "training:1": { expiry: { expires: null } } },
+    }).items[0]!;
+    expect(declined.outcome).toBe("alreadyInEp");
+    // The answer travels with the row it produced. The screen renders its
+    // "Change" control from `item.expiry`, so dropping it here left an
+    // accidental "does not expire" stored, unshown and impossible to take back.
+    expect(declined.expiry).toEqual({ expires: null });
+  });
+
+  it("stays quiet about a derived expiry that could not change the verdict", () => {
+    // EP's row already runs past anything BambooHR's arithmetic could claim,
+    // so there is nothing to ask and the record is simply already held.
     const plan = buildEpPlan({
       entries: [
-        entry({ completed: "2018-04-15", expires: "2027-04-15", expiresDerived: true }),
+        entry({ completed: "2018-04-15", expires: "2019-01-01", expiresDerived: true }),
       ],
       templates: CATALOGUE,
       existing: [held()],
@@ -758,5 +822,142 @@ describe("two records for the same sitting, one of which has the certificate", (
       existing: noExisting,
     });
     expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+  });
+});
+
+describe("keeping two answers about one record", () => {
+  // Both review bots found the same defect here: the screen replaced the whole
+  // decision, so a record needing a template AND an expiry confirmation could
+  // never be made ready. Answering one question sent it back to the bucket for
+  // the other, forever.
+  const template = { kind: "template", templateId: "t-cpr" } as const;
+
+  it("keeps the template when the expiry is answered, and the reverse", () => {
+    const afterTemplate = applyDecisionPatch(undefined, { handling: template });
+    const afterBoth = applyDecisionPatch(afterTemplate ?? undefined, {
+      expiry: { expires: "2027-01-01" },
+    });
+    expect(afterBoth).toEqual({ handling: template, expiry: { expires: "2027-01-01" } });
+
+    // And the other order: confirming the expiry first must survive the pick.
+    const afterExpiry = applyDecisionPatch(undefined, { expiry: { expires: "2027-01-01" } });
+    expect(applyDecisionPatch(afterExpiry ?? undefined, { handling: template })).toEqual({
+      handling: template,
+      expiry: { expires: "2027-01-01" },
+    });
+  });
+
+  it("clears only the field it is told to clear", () => {
+    const both = { handling: template, expiry: { expires: "2027-01-01" } };
+    expect(applyDecisionPatch(both, { handling: null })).toEqual({
+      expiry: { expires: "2027-01-01" },
+    });
+    expect(applyDecisionPatch(both, { expiry: null })).toEqual({ handling: template });
+  });
+
+  it("treats \"does not expire\" as an answer, not as clearing the field", () => {
+    // `{ expires: null }` is the member asserting the certification never
+    // expires. A truthiness test would read it as "no answer" and drop it.
+    expect(applyDecisionPatch(undefined, { expiry: { expires: null } })).toEqual({
+      expiry: { expires: null },
+    });
+  });
+
+  it("forgets the record once nothing is left", () => {
+    expect(applyDecisionPatch({ handling: template }, { handling: null })).toBeNull();
+    expect(applyDecisionPatch(undefined, { handling: null })).toBeNull();
+  });
+});
+
+describe("a confirmed expiry, once the member has settled it", () => {
+  /** A record whose expiry Part 1 calculated rather than read. */
+  function derived(over: Partial<ManifestEntry> = {}) {
+    return entry({
+      name: "CPR",
+      completed: "2026-01-10",
+      expires: "2028-01-10",
+      expiresDerived: true,
+      ...over,
+    });
+  }
+
+  it("holds the record back until the member answers", () => {
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: {},
+    });
+    expect(plan.items[0]!.outcome).toBe("expiryNotStated");
+    expect(submissionFor(plan.items[0]!)).toBeNull();
+  });
+
+  it("sends the date the member confirmed, not the one that was calculated", () => {
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:1": { expiry: { expires: "2027-06-30" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+    expect(submissionFor(plan.items[0]!)?.expires).toBe("2027-06-30");
+  });
+
+  it("sends a blank expiry when the member says it does not expire", () => {
+    // EP stores a blank as "never expires", so this has to reach them as null
+    // rather than as the date this app worked out.
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:1": { expiry: { expires: null } } },
+    });
+    expect(submissionFor(plan.items[0]!)?.expires).toBeNull();
+  });
+
+  it("counts a confirmed later expiry as a renewal of what EP already holds", () => {
+    const held: EpUserCertification[] = [
+      {
+        id: "ep-1",
+        templateId: "t-cpr",
+        completed: "2026-01-10",
+        expires: "2026-12-31",
+        institution: null,
+        documentUrl: null,
+        importedFrom: null,
+      },
+    ];
+    // Same sitting date, but the member's confirmed expiry runs later than the
+    // one on record - a renewal, not a duplicate.
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: held,
+      decisions: { "training:1": { expiry: { expires: "2027-06-30" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+  });
+
+  it("does not treat \"does not expire\" as newer than a dated record EP holds", () => {
+    // Uploading over the county's record on the strength of an ABSENCE is the
+    // wrong way round; only the completion date can settle this one.
+    const held: EpUserCertification[] = [
+      {
+        id: "ep-1",
+        templateId: "t-cpr",
+        completed: "2026-01-10",
+        expires: "2026-12-31",
+        institution: null,
+        documentUrl: null,
+        importedFrom: null,
+      },
+    ];
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: held,
+      decisions: { "training:1": { expiry: { expires: null } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
   });
 });
