@@ -22,7 +22,7 @@ interface Props {
 const CATALOGUE_LIST_ID = "ep-catalogue";
 
 /** The order the buckets are worth reading in. */
-const SECTIONS: Array<{ outcome: EpOutcome; title: string; blurb: string }> = [
+const SECTIONS = [
   {
     outcome: "ready",
     title: "Ready to send",
@@ -47,6 +47,12 @@ const SECTIONS: Array<{ outcome: EpOutcome; title: string; blurb: string }> = [
       "A full official transcript may be submitted instead - partial transcripts and single pages are not accepted.",
   },
   {
+    outcome: "noCompletionDate",
+    title: "No completion date",
+    blurb:
+      "Essential Personnel will not accept a certification without one. Correct the date in BambooHR and export again.",
+  },
+  {
     outcome: "duplicateInPlan",
     title: "Recorded twice in BambooHR",
     blurb: "The same certification appears more than once; the most recent one is being sent.",
@@ -67,7 +73,21 @@ const SECTIONS: Array<{ outcome: EpOutcome; title: string; blurb: string }> = [
     title: "To request as new categories",
     blurb: "Email these names to the training captain so they can be added.",
   },
-];
+] satisfies ReadonlyArray<{ outcome: EpOutcome; title: string; blurb: string }>;
+
+/**
+ * Every outcome the planner can produce has a section here.
+ *
+ * The screen renders by filtering the plan for each section in turn, so an
+ * outcome nobody listed is not an empty bucket - it is a record that vanishes.
+ * `noCompletionDate` did exactly that: the member was never told why a
+ * certification they could see in BambooHR had gone missing. `satisfies` above
+ * keeps the literal types, so this line fails to compile the next time an
+ * outcome is added without a home.
+ */
+const _everyOutcomeIsShown: EpOutcome extends (typeof SECTIONS)[number]["outcome"] ? true : never =
+  true;
+void _everyOutcomeIsShown;
 
 export function EssperScreen({ manifest, directory, onBack }: Props) {
   const ep = useEssper(manifest, directory);
@@ -115,13 +135,23 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                 Just the first part of the address you sign in at — for Loudoun County, "lccfrs".
               </span>
             </label>
-            <button
-              className="primary"
-              disabled={company.trim() === "" || ep.loading != null}
-              onClick={() => void ep.signIn(company.trim())}
-            >
-              {ep.loading ?? "Open Essential Personnel"}
-            </button>
+            {/*
+              A way out, always. Sign-in can stall on something this app has no
+              part in - SSO refusing, the window closed by hand, a member simply
+              changing their mind - and until this was here the only exit from
+              a stalled sign-in was quitting the app. It also stops the polling,
+              which would otherwise go on asking after the screen is gone.
+            */}
+            <div className="actions">
+              <button onClick={() => void ep.signOut().finally(onBack)}>Back</button>
+              <button
+                className="primary"
+                disabled={company.trim() === "" || ep.loading != null}
+                onClick={() => void ep.signIn(company.trim())}
+              >
+                {ep.loading ?? "Open Essential Personnel"}
+              </button>
+            </div>
           </section>
         ) : (
           <>
@@ -282,7 +312,7 @@ function Row({
           <span className="muted">
             You said{" "}
             {item.expiry.expires ? `it expires ${item.expiry.expires}` : "it does not expire"}.{" "}
-            <button className="link-button" onClick={() => onDecide(key, null)}>
+            <button className="link-button" onClick={() => onDecide(key, { expiry: null })}>
               Change
             </button>
           </span>
@@ -296,7 +326,7 @@ function Row({
               defaultValue=""
               onChange={(e) =>
                 e.target.value === ""
-                  ? onDecide(key, null)
+                  ? onDecide(key, { handling: null })
                   : onDecide(key, { handling: { kind: "template", templateId: e.target.value } })
               }
             >
@@ -350,7 +380,7 @@ function Row({
 
       {(item.outcome === "skipped" || item.outcome === "requested") && (
         <div className="ep-row-actions">
-          <button onClick={() => onDecide(key, null)}>Undo</button>
+          <button onClick={() => onDecide(key, { handling: null })}>Undo</button>
         </div>
       )}
     </li>

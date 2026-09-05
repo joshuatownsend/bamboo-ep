@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyDecisionPatch,
   buildEpPlan,
   rankTemplates,
   scoreTemplate,
@@ -758,5 +759,142 @@ describe("two records for the same sitting, one of which has the certificate", (
       existing: noExisting,
     });
     expect(plan.items.map((i) => i.outcome)).toEqual(["duplicateInPlan", "ready"]);
+  });
+});
+
+describe("keeping two answers about one record", () => {
+  // Both review bots found the same defect here: the screen replaced the whole
+  // decision, so a record needing a template AND an expiry confirmation could
+  // never be made ready. Answering one question sent it back to the bucket for
+  // the other, forever.
+  const template = { kind: "template", templateId: "t-cpr" } as const;
+
+  it("keeps the template when the expiry is answered, and the reverse", () => {
+    const afterTemplate = applyDecisionPatch(undefined, { handling: template });
+    const afterBoth = applyDecisionPatch(afterTemplate ?? undefined, {
+      expiry: { expires: "2027-01-01" },
+    });
+    expect(afterBoth).toEqual({ handling: template, expiry: { expires: "2027-01-01" } });
+
+    // And the other order: confirming the expiry first must survive the pick.
+    const afterExpiry = applyDecisionPatch(undefined, { expiry: { expires: "2027-01-01" } });
+    expect(applyDecisionPatch(afterExpiry ?? undefined, { handling: template })).toEqual({
+      handling: template,
+      expiry: { expires: "2027-01-01" },
+    });
+  });
+
+  it("clears only the field it is told to clear", () => {
+    const both = { handling: template, expiry: { expires: "2027-01-01" } };
+    expect(applyDecisionPatch(both, { handling: null })).toEqual({
+      expiry: { expires: "2027-01-01" },
+    });
+    expect(applyDecisionPatch(both, { expiry: null })).toEqual({ handling: template });
+  });
+
+  it("treats \"does not expire\" as an answer, not as clearing the field", () => {
+    // `{ expires: null }` is the member asserting the certification never
+    // expires. A truthiness test would read it as "no answer" and drop it.
+    expect(applyDecisionPatch(undefined, { expiry: { expires: null } })).toEqual({
+      expiry: { expires: null },
+    });
+  });
+
+  it("forgets the record once nothing is left", () => {
+    expect(applyDecisionPatch({ handling: template }, { handling: null })).toBeNull();
+    expect(applyDecisionPatch(undefined, { handling: null })).toBeNull();
+  });
+});
+
+describe("a confirmed expiry, once the member has settled it", () => {
+  /** A record whose expiry Part 1 calculated rather than read. */
+  function derived(over: Partial<ManifestEntry> = {}) {
+    return entry({
+      name: "CPR",
+      completed: "2026-01-10",
+      expires: "2028-01-10",
+      expiresDerived: true,
+      ...over,
+    });
+  }
+
+  it("holds the record back until the member answers", () => {
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: {},
+    });
+    expect(plan.items[0]!.outcome).toBe("expiryNotStated");
+    expect(submissionFor(plan.items[0]!)).toBeNull();
+  });
+
+  it("sends the date the member confirmed, not the one that was calculated", () => {
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:1": { expiry: { expires: "2027-06-30" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+    expect(submissionFor(plan.items[0]!)?.expires).toBe("2027-06-30");
+  });
+
+  it("sends a blank expiry when the member says it does not expire", () => {
+    // EP stores a blank as "never expires", so this has to reach them as null
+    // rather than as the date this app worked out.
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:1": { expiry: { expires: null } } },
+    });
+    expect(submissionFor(plan.items[0]!)?.expires).toBeNull();
+  });
+
+  it("counts a confirmed later expiry as a renewal of what EP already holds", () => {
+    const held: EpUserCertification[] = [
+      {
+        id: "ep-1",
+        templateId: "t-cpr",
+        completed: "2026-01-10",
+        expires: "2026-12-31",
+        institution: null,
+        documentUrl: null,
+        importedFrom: null,
+      },
+    ];
+    // Same sitting date, but the member's confirmed expiry runs later than the
+    // one on record - a renewal, not a duplicate.
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: held,
+      decisions: { "training:1": { expiry: { expires: "2027-06-30" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("ready");
+  });
+
+  it("does not treat \"does not expire\" as newer than a dated record EP holds", () => {
+    // Uploading over the county's record on the strength of an ABSENCE is the
+    // wrong way round; only the completion date can settle this one.
+    const held: EpUserCertification[] = [
+      {
+        id: "ep-1",
+        templateId: "t-cpr",
+        completed: "2026-01-10",
+        expires: "2026-12-31",
+        institution: null,
+        documentUrl: null,
+        importedFrom: null,
+      },
+    ];
+    const plan = buildEpPlan({
+      entries: [derived()],
+      templates: CATALOGUE,
+      existing: held,
+      decisions: { "training:1": { expiry: { expires: null } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("alreadyInEp");
   });
 });

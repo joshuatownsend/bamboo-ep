@@ -63,7 +63,10 @@ export interface EpTemplateMatch {
 
 /**
  * What the member decided about a record whose fate the matcher could not
- * settle on its own. Remembered between runs.
+ * settle on its own. Held for one run only - see `EpDecisions`.
+ *
+ * The two fields are answers to two independent questions, and a record can
+ * need both, so a caller updating one must preserve the other.
  */
 export interface EpDecision {
   /**
@@ -85,6 +88,53 @@ export interface EpDecision {
    * does not expire, which is what Essential Personnel stores a blank as.
    */
   expiry?: { expires: string | null };
+}
+
+/**
+ * A change to ONE of the two answers a record can carry.
+ *
+ * `null` for a field clears just that field; an absent field is left alone.
+ * The distinction matters: "the member took back their template choice" and
+ * "this update is not about the template" are different instructions.
+ */
+export interface EpDecisionPatch {
+  handling?: EpDecision["handling"] | null;
+  expiry?: EpDecision["expiry"] | null;
+}
+
+/**
+ * Apply one patch to a record's answer, returning what to store - or `null`
+ * when nothing is left to remember.
+ *
+ * Lives here rather than in the screen because it is what keeps `EpDecision`'s
+ * two fields independent, which is the whole reason they are two fields. The
+ * screen used to replace the object wholesale, so answering the second
+ * question erased the first: a record needing both a template and an expiry
+ * bounced between the two buckets forever and could never be made ready.
+ */
+export function applyDecisionPatch(
+  existing: EpDecision | undefined,
+  patch: EpDecisionPatch,
+): EpDecision | null {
+  const merged: EpDecision = { ...existing };
+
+  // `in` rather than a truthiness test, so "clear this" and "I am not talking
+  // about this" stay distinguishable.
+  if ("handling" in patch) {
+    if (patch.handling) merged.handling = patch.handling;
+    else delete merged.handling;
+  }
+  if ("expiry" in patch) {
+    // `{ expires: null }` is the member asserting the certification does not
+    // expire. That is an answer, not the absence of one - and truthy, being an
+    // object, which is what keeps it from being mistaken for a clear.
+    if (patch.expiry) merged.expiry = patch.expiry;
+    else delete merged.expiry;
+  }
+
+  // An empty decision and no decision mean the same thing; keeping one would
+  // make "has the member answered?" two questions instead of one.
+  return merged.handling || merged.expiry ? merged : null;
 }
 
 /**

@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
+  applyDecisionPatch,
   buildEpPlan,
+  type EpDecisionPatch,
   type EpDecisions,
   type EpPlan,
   type EpTemplate,
@@ -140,27 +142,27 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
    * after the first twenty, which is worse than a bulk action they can undo:
    * nothing is uploaded either way, and every row keeps its own Undo.
    */
-  const decideMany = useCallback((keys: readonly string[], decision: EpDecisions[string]) => {
+  const decideMany = useCallback((keys: readonly string[], patch: EpDecisionPatch) => {
     setDecisions((current) => {
       const next = { ...current };
-      for (const key of keys) next[key] = decision;
+      for (const key of keys) merge(next, key, patch);
       return next;
     });
   }, []);
 
-  const forget = useCallback((keys: readonly string[]) => {
-    setDecisions((current) => {
-      const next = { ...current };
-      for (const key of keys) delete next[key];
-      return next;
-    });
-  }, []);
+  /** Take back one field's answer across a bucket, leaving the other alone. */
+  const forget = useCallback(
+    (keys: readonly string[], patch: EpDecisionPatch = { handling: null }) => {
+      decideMany(keys, patch);
+    },
+    [decideMany],
+  );
 
-  const decide = useCallback((key: string, decision: EpDecisions[string] | null) => {
+  const decide = useCallback((key: string, patch: EpDecisionPatch | null) => {
     setDecisions((current) => {
       const next = { ...current };
-      if (decision) next[key] = decision;
-      else delete next[key];
+      if (patch === null) delete next[key];
+      else merge(next, key, patch);
       return next;
     });
   }, []);
@@ -238,6 +240,13 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
     signOut,
     stopPolling,
   };
+}
+
+/** `applyDecisionPatch` against a mutable draft, since every caller has one. */
+function merge(draft: Record<string, EpDecisions[string]>, key: string, patch: EpDecisionPatch) {
+  const merged = applyDecisionPatch(draft[key], patch);
+  if (merged) draft[key] = merged;
+  else delete draft[key];
 }
 
 function messageOf(error: unknown): string {
