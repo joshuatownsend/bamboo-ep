@@ -219,7 +219,18 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
   const signOut = useCallback(async () => {
     stopPolling();
     await closeEssperLogin().catch(() => undefined);
+    // Everything read or decided belonged to the account that just left. Only
+    // clearing `member` left the catalogue, the held records, the answers and
+    // the upload results in place, so signing in as someone else would show
+    // them a plan built from the previous member's record. The screen unmounts
+    // on Back today, which hides this - but the reset is what makes that a
+    // convenience rather than the only thing standing between two accounts.
     setMember(null);
+    setTemplates([]);
+    setExisting([]);
+    setDecisions({});
+    setUploads({});
+    setError(null);
   }, [stopPolling]);
 
   return {

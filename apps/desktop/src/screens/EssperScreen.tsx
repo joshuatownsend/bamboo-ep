@@ -67,7 +67,14 @@ const SECTIONS = [
     title: "Imported from Target Solutions",
     blurb: "The General Order says these do not need re-uploading.",
   },
-  { outcome: "skipped", title: "Not tracked by LC-CFRS", blurb: "You marked these as out of scope." },
+  {
+    outcome: "skipped",
+    title: "Not being sent",
+    // Two different reasons land here - training the county does not track,
+    // and a row whose automatic match was wrong. Saying "out of scope" made
+    // the screen assert something untrue about the second kind.
+    blurb: "You chose not to send these. Nothing about them goes to Essential Personnel.",
+  },
   {
     outcome: "requested",
     title: "To request as new categories",
@@ -135,23 +142,13 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                 Just the first part of the address you sign in at — for Loudoun County, "lccfrs".
               </span>
             </label>
-            {/*
-              A way out, always. Sign-in can stall on something this app has no
-              part in - SSO refusing, the window closed by hand, a member simply
-              changing their mind - and until this was here the only exit from
-              a stalled sign-in was quitting the app. It also stops the polling,
-              which would otherwise go on asking after the screen is gone.
-            */}
-            <div className="actions">
-              <button onClick={() => void ep.signOut().finally(onBack)}>Back</button>
-              <button
-                className="primary"
-                disabled={company.trim() === "" || ep.loading != null}
-                onClick={() => void ep.signIn(company.trim())}
-              >
-                {ep.loading ?? "Open Essential Personnel"}
-              </button>
-            </div>
+            <button
+              className="primary"
+              disabled={company.trim() === "" || ep.loading != null}
+              onClick={() => void ep.signIn(company.trim())}
+            >
+              {ep.loading ?? "Open Essential Personnel"}
+            </button>
           </section>
         ) : (
           <>
@@ -245,29 +242,38 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
               </section>
             )}
 
-            <div className="actions">
-              <button
-                onClick={() => void ep.signOut().finally(onBack)}
-                disabled={ep.busy}
-              >
-                Back
-              </button>
-              <button
-                className="primary"
-                disabled={ep.busy || readyCount === 0}
-                onClick={() => void ep.submitAll()}
-              >
-                {ep.busy
-                  ? "Sending…"
-                  : `Send ${readyCount} certification${readyCount === 1 ? "" : "s"}`}
-              </button>
-            </div>
             <p className="muted">
               These go onto your Essential Personnel record immediately — there is no
               approval step to undo a mistake.
             </p>
           </>
         )}
+
+        {/*
+          One Back, rendered in every state rather than inside a branch.
+          Two rounds of review found two different states with no way out -
+          before sign-in, and after signing in when reading the record fails.
+          A third copy would only have waited for a fourth state; this cannot
+          go missing because there is nowhere for it to be missing from. It is
+          disabled only while uploads are in flight, which is the one moment
+          leaving would abandon work half-done.
+        */}
+        <div className="actions">
+          <button onClick={() => void ep.signOut().finally(onBack)} disabled={ep.busy}>
+            Back
+          </button>
+          {ep.plan && (
+            <button
+              className="primary"
+              disabled={ep.busy || readyCount === 0}
+              onClick={() => void ep.submitAll()}
+            >
+              {ep.busy
+                ? "Sending…"
+                : `Send ${readyCount} certification${readyCount === 1 ? "" : "s"}`}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -319,7 +325,7 @@ function Row({
         )}
       </div>
 
-      {item.outcome === "needsTriage" && (
+      {(item.outcome === "needsTriage" || item.outcome === "ready") && (
         <div className="ep-row-actions">
           {item.candidates.length > 0 && (
             <select
@@ -330,7 +336,9 @@ function Row({
                   : onDecide(key, { handling: { kind: "template", templateId: e.target.value } })
               }
             >
-              <option value="">Closest matches…</option>
+              <option value="">
+                {item.outcome === "ready" ? "Change to…" : "Closest matches…"}
+              </option>
               {item.candidates.map((c) => (
                 <option key={c.template.id} value={c.template.id}>
                   {c.template.name} ({Math.round(c.score * 100)}%)
@@ -355,11 +363,18 @@ function Row({
               }
             }}
           />
-          <button onClick={() => onDecide(key, { handling: { kind: "request" } })}>
-            Ask for it to be added
-          </button>
+          {/*
+            Asking for a new category makes no sense for a row already matched
+            to one, so a ready row gets only the two controls that do: pick a
+            different certification, or leave it out.
+          */}
+          {item.outcome === "needsTriage" && (
+            <button onClick={() => onDecide(key, { handling: { kind: "request" } })}>
+              Ask for it to be added
+            </button>
+          )}
           <button onClick={() => onDecide(key, { handling: { kind: "skip" } })}>
-            Not tracked by LC-CFRS
+            {item.outcome === "ready" ? "Do not send" : "Not tracked by LC-CFRS"}
           </button>
         </div>
       )}

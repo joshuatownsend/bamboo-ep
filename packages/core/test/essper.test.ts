@@ -306,28 +306,46 @@ describe("renewals are not duplicates", () => {
 describe("decisions keyed by a row's position", () => {
   /**
    * A certifications row with no id is keyed by where it sat in BambooHR's
-   * response. Reorder the rows and the same key names a different
-   * certification - so a remembered "skip" could silently drop a credential
-   * the member never skipped. Part 1 has the same guard.
+   * response, so the same key names a different certification if the rows are
+   * reordered. That makes such a key unsafe to REMEMBER - and these decisions
+   * are not remembered. They are held in memory, answered against the list in
+   * front of the member, and discarded when the screen closes.
+   *
+   * These two cases previously asserted the opposite. Applying the cross-run
+   * guard to an in-memory answer meant a member could skip a row without a
+   * BambooHR id and watch nothing happen.
    */
-  it("ignores a remembered skip on a positional key", () => {
+  it("honours a skip on a positional key", () => {
     const plan = buildEpPlan({
       entries: [entry({ key: "certifications:row-0" })],
       templates: CATALOGUE,
       existing: noExisting,
       decisions: { "certifications:row-0": { handling: { kind: "skip" } } },
     });
-    expect(plan.items[0]!.outcome).not.toBe("skipped");
+    expect(plan.items[0]!.outcome).toBe("skipped");
   });
 
-  it("ignores a remembered template on a positional key", () => {
+  it("honours a template chosen for a positional key", () => {
     const plan = buildEpPlan({
       entries: [entry({ key: "certifications:row-3", name: "Unplaceable name" })],
       templates: CATALOGUE,
       existing: noExisting,
       decisions: { "certifications:row-3": { handling: { kind: "template", templateId: "t-forklift" } } },
     });
-    expect(plan.items[0]!.template).toBeNull();
+    expect(plan.items[0]!.template?.id).toBe("t-forklift");
+  });
+
+  it("honours a request on the training spelling of a positional key", () => {
+    // `training:record-N` is the other positional form, and the one a previous
+    // round found missing from the stability check entirely.
+    const plan = buildEpPlan({
+      entries: [entry({ key: "training:record-2", name: "Volunteer Recruit School" })],
+      templates: CATALOGUE,
+      existing: noExisting,
+      decisions: { "training:record-2": { handling: { kind: "request" } } },
+    });
+    expect(plan.items[0]!.outcome).toBe("requested");
+    expect(plan.catalogueRequests).toContain("Volunteer Recruit School");
   });
 
   it("still honours a decision on a real certifications id", () => {

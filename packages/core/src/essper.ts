@@ -13,7 +13,6 @@
  */
 
 import type { ManifestEntry } from "./manifest.js";
-import { isStableKey } from "./items.js";
 import { tokenOverlap, tokenize, compareNumbers } from "./matching.js";
 
 /** One entry in EP's certification catalogue, from `/template/certification/all`. */
@@ -360,7 +359,22 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // credential the member never skipped, or file one under the template that
     // previously occupied the slot. Part 1 learned this the hard way; the rule
     // is shared rather than restated.
-    const decision = isStableKey(entry.key) ? decisions[entry.key] : undefined;
+    // Every decision is honoured, positional keys included.
+    //
+    // `isStableKey` guards REMEMBERING an answer across runs: a key like
+    // `certifications:row-3` names whatever drifted into that slot, so a saved
+    // answer could silently skip a credential the member never skipped. That
+    // hazard is entirely cross-run. These decisions are held in memory for one
+    // run, made against the very manifest this plan is built from, and the
+    // screen holding them unmounts when the member leaves - so within one plan
+    // build `row-3` names exactly one entry. Applying the guard here instead
+    // meant a member could pick a template, request a category or skip a row
+    // without an id, and watch nothing happen.
+    //
+    // The rule still stands at the boundary it was written for: see
+    // `EpDecisions`. Nothing may be written to disk unless its key passes
+    // `isStableKey`.
+    const decision = decisions[entry.key];
     const handling = decision?.handling;
     const candidates = rankTemplates(entry.name, input.templates);
 

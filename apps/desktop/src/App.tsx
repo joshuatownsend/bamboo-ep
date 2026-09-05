@@ -46,12 +46,26 @@ const APP_VERSION = "0.1.0";
 
 type Step = "setup" | "probe" | "review" | "result" | "essper";
 
-const STEP_LABELS: Array<{ step: Step; label: string }> = [
+const STEP_LABELS = [
   { step: "setup", label: "Connect" },
   { step: "probe", label: "Check access" },
   { step: "review", label: "Review matches" },
-  { step: "result", label: "Done" },
-];
+  { step: "result", label: "Export" },
+  { step: "essper", label: "Send to EP" },
+] satisfies ReadonlyArray<{ step: Step; label: string }>;
+
+/**
+ * Every step has a label.
+ *
+ * `essper` was added to `Step` without being added here, so the header found
+ * no current step and `findIndex` returned -1 - which the "done" styling reads
+ * as "nothing is finished". A union widened without its lookup table, the same
+ * shape of bug as the missing outcome section. This line fails to compile the
+ * next time one is added without the other. "Done" became "Export", since it
+ * is no longer the last thing that happens.
+ */
+const _everyStepIsLabelled: Step extends (typeof STEP_LABELS)[number]["step"] ? true : never = true;
+void _everyStepIsLabelled;
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
