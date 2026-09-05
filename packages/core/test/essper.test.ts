@@ -562,10 +562,52 @@ describe("renewals that only move the expiry", () => {
    * BambooHR states none. Treating that as proof of a renewal would upload a
    * duplicate on the strength of this app's own arithmetic.
    */
-  it("does not treat a derived expiry as evidence of a renewal", () => {
+  it("asks about a derived expiry rather than deciding the record is already held", () => {
+    // This asserted `alreadyInEp` until review pointed out what that forecloses:
+    // a derived expiry is not evidence, so the record ranks as no newer - but
+    // only `expiryNotStated` rows offer the confirm buttons, so the member
+    // could never supply the date that would settle it. The verdict is withheld
+    // and the question asked instead.
+    const derived = entry({
+      completed: "2018-04-15",
+      expires: "2027-04-15",
+      expiresDerived: true,
+    });
+    const plan = buildEpPlan({
+      entries: [derived],
+      templates: CATALOGUE,
+      existing: [held()],
+    });
+    expect(plan.items[0]!.outcome).toBe("expiryNotStated");
+
+    // Confirming the later date makes it a renewal...
+    expect(
+      buildEpPlan({
+        entries: [derived],
+        templates: CATALOGUE,
+        existing: [held()],
+        decisions: { "training:1": { expiry: { expires: "2027-04-15" } } },
+      }).items[0]!.outcome,
+    ).toBe("ready");
+
+    // ...and saying it does not expire leaves EP's dated row standing, since
+    // an absence is not grounds to upload over the system of record.
+    expect(
+      buildEpPlan({
+        entries: [derived],
+        templates: CATALOGUE,
+        existing: [held()],
+        decisions: { "training:1": { expiry: { expires: null } } },
+      }).items[0]!.outcome,
+    ).toBe("alreadyInEp");
+  });
+
+  it("stays quiet about a derived expiry that could not change the verdict", () => {
+    // EP's row already runs past anything BambooHR's arithmetic could claim,
+    // so there is nothing to ask and the record is simply already held.
     const plan = buildEpPlan({
       entries: [
-        entry({ completed: "2018-04-15", expires: "2027-04-15", expiresDerived: true }),
+        entry({ completed: "2018-04-15", expires: "2019-01-01", expiresDerived: true }),
       ],
       templates: CATALOGUE,
       existing: [held()],

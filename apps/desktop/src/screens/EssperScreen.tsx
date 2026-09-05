@@ -1,5 +1,11 @@
 import { useState } from "react";
-import type { EpOutcome, EpPlanItem, EpTemplate, Manifest } from "@bamboo-ep/core";
+import type {
+  EpDecision,
+  EpOutcome,
+  EpPlanItem,
+  EpTemplate,
+  Manifest,
+} from "@bamboo-ep/core";
 import { useEssper, type UploadState } from "../useEssper";
 
 /**
@@ -185,6 +191,7 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                     <p>
                       <button
                         className="secondary"
+                        disabled={ep.busy}
                         onClick={() =>
                           ep.decideMany(
                             items.map((i) => i.entry.key),
@@ -205,6 +212,7 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                     <p>
                       <button
                         className="link-button"
+                        disabled={ep.busy}
                         onClick={() => ep.forget(items.map((i) => i.entry.key))}
                       >
                         Put all {items.length} back
@@ -218,6 +226,8 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
                         item={item}
                         templates={ep.templates}
                         upload={ep.uploads[item.entry.key]}
+                        decision={ep.decisions[item.entry.key]}
+                        busy={ep.busy}
                         onDecide={ep.decide}
                       />
                     ))}
@@ -283,11 +293,16 @@ function Row({
   item,
   templates,
   upload,
+  decision,
+  busy,
   onDecide,
 }: {
   item: EpPlanItem;
   templates: readonly EpTemplate[];
   upload: UploadState | undefined;
+  decision: EpDecision | undefined;
+  /** A batch is in flight, so every control that changes the plan is frozen. */
+  busy: boolean;
   onDecide: ReturnType<typeof useEssper>["decide"];
 }) {
   const key = item.entry.key;
@@ -318,7 +333,11 @@ function Row({
           <span className="muted">
             You said{" "}
             {item.expiry.expires ? `it expires ${item.expiry.expires}` : "it does not expire"}.{" "}
-            <button className="link-button" onClick={() => onDecide(key, { expiry: null })}>
+            <button
+              className="link-button"
+              disabled={busy}
+              onClick={() => onDecide(key, { expiry: null })}
+            >
               Change
             </button>
           </span>
@@ -330,6 +349,7 @@ function Row({
           {item.candidates.length > 0 && (
             <select
               defaultValue=""
+              disabled={busy}
               onChange={(e) =>
                 e.target.value === ""
                   ? onDecide(key, { handling: null })
@@ -355,7 +375,8 @@ function Row({
           */}
           <input
             list={CATALOGUE_LIST_ID}
-            placeholder="or search all 401…"
+            disabled={busy}
+            placeholder={`or search all ${templates.length}…`}
             onChange={(e) => {
               const match = templates.find((t) => t.name === e.target.value);
               if (match) {
@@ -369,11 +390,14 @@ function Row({
             different certification, or leave it out.
           */}
           {item.outcome === "needsTriage" && (
-            <button onClick={() => onDecide(key, { handling: { kind: "request" } })}>
+            <button
+              disabled={busy}
+              onClick={() => onDecide(key, { handling: { kind: "request" } })}
+            >
               Ask for it to be added
             </button>
           )}
-          <button onClick={() => onDecide(key, { handling: { kind: "skip" } })}>
+          <button disabled={busy} onClick={() => onDecide(key, { handling: { kind: "skip" } })}>
             {item.outcome === "ready" ? "Do not send" : "Not tracked by LC-CFRS"}
           </button>
         </div>
@@ -383,19 +407,39 @@ function Row({
         <div className="ep-row-actions">
           <button
             className="primary"
+            disabled={busy}
             onClick={() => onDecide(key, { expiry: { expires: item.entry.expires } })}
           >
             Expires {item.entry.expires}
           </button>
-          <button onClick={() => onDecide(key, { expiry: { expires: null } })}>
+          <button disabled={busy} onClick={() => onDecide(key, { expiry: { expires: null } })}>
             Does not expire
           </button>
         </div>
       )}
 
+      {/*
+        A manual template choice can land the row anywhere - already held,
+        imported from Target Solutions, superseded, no file, no completion
+        date. None of those buckets render the picker, so an accidental pick
+        used to be unreachable: the only way back was leaving the screen and
+        answering every question again from the start.
+      */}
+      {decision?.handling?.kind === "template" &&
+        item.outcome !== "needsTriage" &&
+        item.outcome !== "ready" && (
+          <div className="ep-row-actions">
+            <button disabled={busy} onClick={() => onDecide(key, { handling: null })}>
+              Undo my choice
+            </button>
+          </div>
+        )}
+
       {(item.outcome === "skipped" || item.outcome === "requested") && (
         <div className="ep-row-actions">
-          <button onClick={() => onDecide(key, { handling: null })}>Undo</button>
+          <button disabled={busy} onClick={() => onDecide(key, { handling: null })}>
+            Undo
+          </button>
         </div>
       )}
     </li>

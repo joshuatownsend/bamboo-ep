@@ -67,6 +67,10 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
    */
   const polling = useRef<number | null>(null);
 
+  /** What the member has answered as of this render, readable inside `submitAll`. */
+  const latestDecisions = useRef<EpDecisions>(decisions);
+  latestDecisions.current = decisions;
+
   const stopPolling = useCallback(() => {
     if (polling.current !== null) {
       window.clearInterval(polling.current);
@@ -186,6 +190,13 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
       const file = item.entry.file;
       if (!submission || !file) continue;
       if (uploads[item.entry.key]?.status === "sent") continue;
+      // The plan this loop walks was captured when Send was pressed. The
+      // screen freezes the row controls while a batch is in flight, so it
+      // should not be able to drift - but this is a write to the county's
+      // system of record, and one map lookup is a small price beside
+      // uploading something the member has since excluded.
+      const nowSays = latestDecisions.current[item.entry.key]?.handling;
+      if (nowSays && nowSays.kind !== "template") continue;
 
       setUploads((u) => ({ ...u, [item.entry.key]: { status: "sending" } }));
       try {
@@ -236,6 +247,7 @@ export function useEssper(manifest: Manifest | null, directory: string | null) {
   return {
     tenant,
     member,
+    decisions,
     loading,
     error,
     plan,

@@ -117,18 +117,20 @@ export function applyDecisionPatch(
 ): EpDecision | null {
   const merged: EpDecision = { ...existing };
 
-  // `in` rather than a truthiness test, so "clear this" and "I am not talking
-  // about this" stay distinguishable.
-  if ("handling" in patch) {
-    if (patch.handling) merged.handling = patch.handling;
-    else delete merged.handling;
+  // Only `null` clears. `undefined` means "this update is not about that
+  // field" - the same as leaving it out - because an optional field is
+  // routinely undefined by accident, and reading that as "erase the member's
+  // answer" makes a typo destructive.
+  if (patch.handling !== undefined) {
+    if (patch.handling === null) delete merged.handling;
+    else merged.handling = patch.handling;
   }
-  if ("expiry" in patch) {
+  if (patch.expiry !== undefined) {
     // `{ expires: null }` is the member asserting the certification does not
-    // expire. That is an answer, not the absence of one - and truthy, being an
-    // object, which is what keeps it from being mistaken for a clear.
-    if (patch.expiry) merged.expiry = patch.expiry;
-    else delete merged.expiry;
+    // expire. That is an answer, not the absence of one, and must not be
+    // mistaken for a clear - which is why only `null` itself clears.
+    if (patch.expiry === null) delete merged.expiry;
+    else merged.expiry = patch.expiry;
   }
 
   // An empty decision and no decision mean the same thing; keeping one would
@@ -456,7 +458,34 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // "Already there" is a statement about the catalogue entry, so it is only
     // meaningful once a template is settled.
     const already = newestFor(input.existing, row.chosen.id);
-    if (already && !isRenewalOf(row.entry, already, decisions[row.entry.key]?.expiry ?? null)) {
+    const settledExpiry = decisions[row.entry.key]?.expiry ?? null;
+
+    // An unconfirmed calculated expiry can leave "already held" undecidable.
+    //
+    // `sittingOfEntry` discards a derived expiry - rightly, since this app's
+    // arithmetic is not evidence - so a record whose calculated expiry runs
+    // past EP's ranked as no newer and was reported as already on the profile.
+    // Only `expiryNotStated` rows offer the confirm buttons, so the member
+    // could never supply the date that would have made it a renewal: the
+    // outcome foreclosed the question whose answer decides the outcome.
+    //
+    // So the already-held verdict is withheld while confirming could overturn
+    // it, and the record carries on to the expiry question below. Below, not
+    // here, because a record with no file or no completion date cannot be
+    // submitted whatever its expiry - asking first would be noise in place of
+    // the answer the member can actually act on.
+    //
+    // Judged at its best case: if EP's row covers this sitting even taking
+    // BambooHR's calculated date at face value, nothing is in question, and a
+    // member re-running after an upload is not interrogated about a record
+    // already safely filed.
+    const confirmingCouldOverturnIt =
+      row.entry.expiresDerived &&
+      row.entry.expires !== null &&
+      settledExpiry === null &&
+      (!already || isRenewalOf(row.entry, already, { expires: row.entry.expires }));
+
+    if (already && !confirmingCouldOverturnIt && !isRenewalOf(row.entry, already, settledExpiry)) {
       return item(
         row.entry,
         already.importedFrom ? "importedByTargetSolutions" : "alreadyInEp",
@@ -513,11 +542,8 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
     // them to answer belongs with the review screen that will ask the
     // question - designing it here, with nothing to design it against, is
     // what this outcome deliberately defers.
-    // A confirmed date is the member's assertion, not this app's arithmetic,
-    // so it counts as evidence of a renewal as well as being submittable.
-    // Read before the duplicate check for that reason.
-    const settledExpiry = decisions[row.entry.key]?.expiry ?? null;
-
+    // Reached either because EP holds nothing for this certification, or
+    // because the already-held verdict above was withheld pending this answer.
     if (row.entry.expiresDerived && row.entry.expires && !settledExpiry) {
       return item(
         row.entry,
