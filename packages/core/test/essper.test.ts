@@ -592,14 +592,17 @@ describe("renewals that only move the expiry", () => {
 
     // ...and saying it does not expire leaves EP's dated row standing, since
     // an absence is not grounds to upload over the system of record.
-    expect(
-      buildEpPlan({
-        entries: [derived],
-        templates: CATALOGUE,
-        existing: [held()],
-        decisions: { "training:1": { expiry: { expires: null } } },
-      }).items[0]!.outcome,
-    ).toBe("alreadyInEp");
+    const declined = buildEpPlan({
+      entries: [derived],
+      templates: CATALOGUE,
+      existing: [held()],
+      decisions: { "training:1": { expiry: { expires: null } } },
+    }).items[0]!;
+    expect(declined.outcome).toBe("alreadyInEp");
+    // The answer travels with the row it produced. The screen renders its
+    // "Change" control from `item.expiry`, so dropping it here left an
+    // accidental "does not expire" stored, unshown and impossible to take back.
+    expect(declined.expiry).toEqual({ expires: null });
   });
 
   it("stays quiet about a derived expiry that could not change the verdict", () => {

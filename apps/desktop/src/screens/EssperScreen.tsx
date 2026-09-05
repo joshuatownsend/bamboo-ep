@@ -1,10 +1,12 @@
 import { useState } from "react";
-import type {
-  EpDecision,
-  EpOutcome,
-  EpPlanItem,
-  EpTemplate,
-  Manifest,
+import {
+  isTroubling,
+  type EpDecision,
+  type EpOutcome,
+  type EpPlanItem,
+  type EpTemplate,
+  type Manifest,
+  type Verification,
 } from "@bamboo-ep/core";
 import { useEssper, type UploadState } from "../useEssper";
 
@@ -289,6 +291,53 @@ export function EssperScreen({ manifest, directory, onBack }: Props) {
   );
 }
 
+/**
+ * What Part 1's verification found that the member should see before sending.
+ *
+ * Legibility was the only thing checked here, which left the verdicts that
+ * matter most silent: a `person: "contradicts"` verdict means the model read a
+ * DIFFERENT NAME on the certificate than the record it was filed under - the
+ * document may belong to somebody else entirely. That warning was written to
+ * the manifest, carried through the export, and then dropped on the one screen
+ * where acting on it still costs nothing. Every troubling verdict is surfaced
+ * now, each naming what specifically disagrees, because "something is wrong
+ * with this" is not a claim a member can check.
+ */
+function verificationWarnings(verification: Verification | null): string[] {
+  if (!verification) return [];
+  const warnings: string[] = [];
+
+  if (verification.extracted?.legible === false) {
+    warnings.push(
+      "The certificate was hard to read. The General Order makes legibility your " +
+        "responsibility \u2014 check it before sending.",
+    );
+  }
+
+  if (isTroubling(verification)) {
+    const { name, date, person } = verification.verdicts;
+    if (person === "contradicts") {
+      warnings.push(
+        "The name on this certificate does not look like yours. Open it before sending \u2014 " +
+          "this would file somebody else's credential under your record.",
+      );
+    }
+    if (name === "contradicts") {
+      warnings.push(
+        "The certificate does not appear to be for this certification. Check it before sending.",
+      );
+    }
+    if (date === "contradicts") {
+      warnings.push(
+        "The date on the certificate disagrees with the date being submitted. Check it " +
+          "before sending.",
+      );
+    }
+  }
+
+  return warnings;
+}
+
 function Row({
   item,
   templates,
@@ -306,7 +355,7 @@ function Row({
   onDecide: ReturnType<typeof useEssper>["decide"];
 }) {
   const key = item.entry.key;
-  const flagged = item.entry.verification?.extracted?.legible === false;
+  const warnings = verificationWarnings(item.entry.verification);
 
   return (
     <li className="ep-row">
@@ -318,12 +367,11 @@ function Row({
         </span>
         <span className="muted">{item.explanation}</span>
 
-        {flagged && (
-          <span className="tag tag-warn">
-            The certificate was hard to read. The General Order makes legibility your
-            responsibility — check it before sending.
+        {warnings.map((warning) => (
+          <span key={warning} className="tag tag-warn">
+            {warning}
           </span>
-        )}
+        ))}
 
         {upload?.status === "sent" && <span className="tag">Sent</span>}
         {upload?.status === "sending" && <span className="muted">Sending…</span>}

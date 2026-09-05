@@ -23,7 +23,7 @@ interface EpResponse {
  */
 function fetchFor(tenant: string): EpFetch {
   return async (input, init) => {
-    const path = input.startsWith("http") ? new URL(input).pathname + new URL(input).search : input;
+    const path = pathOf(input);
     const response = await invoke<EpResponse>("essper_request", {
       tenant,
       method: init?.method ?? "GET",
@@ -36,6 +36,13 @@ function fetchFor(tenant: string): EpFetch {
       text: async () => response.body,
     };
   };
+}
+
+/** The part Rust needs, parsed once: the host is not this side's to choose. */
+function pathOf(input: string): string {
+  if (!input.startsWith("http")) return input;
+  const url = new URL(input);
+  return url.pathname + url.search;
 }
 
 /**

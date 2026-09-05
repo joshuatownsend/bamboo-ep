@@ -495,6 +495,12 @@ export function buildEpPlan(input: BuildEpPlanInput): EpPlan {
         already.importedFrom
           ? `Already in EP, imported from ${already.importedFrom}. The General Order says not to re-upload these.`
           : "Already on your EP profile.",
+        // The member's expiry answer travels with the row even though this
+        // outcome does not submit anything. Answering "does not expire" is
+        // what lands a record here, and the screen renders its Change control
+        // from `item.expiry` - so dropping it here left the answer stored,
+        // unshown, and impossible to take back.
+        settledExpiry,
       );
     }
 
